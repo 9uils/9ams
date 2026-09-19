@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 class Api::V1::InstancesController < Api::V2::InstancesController
+  skip_before_action :require_authenticated_user!, only: [:show]
+  
   include DeprecationConcern
 
   deprecate_api '2022-11-14'
