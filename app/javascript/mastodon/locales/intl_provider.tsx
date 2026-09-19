@@ -6,7 +6,6 @@ import { isProduction } from 'mastodon/utils/environment';
 
 import { getLocale, isLocaleLoaded } from './global_locale';
 import { loadLocale } from './load_locale';
-import Josa from './josa'; // [수정] Josa import
 
 function onProviderError(error: unknown) {
   // Silent the error, like upstream does
@@ -46,44 +45,10 @@ export const IntlProvider: React.FC<
 
   const { locale, messages } = getLocale();
 
-  // [수정] Josa 적용  
-  function processJosa(data: any): any {
-    if (typeof data === 'string') {
-      return Josa.c(data);
-    }
-
-    // 배열 처리
-    if (Array.isArray(data)) {
-      return data.map(processJosa);
-    }
-
-    if (data && typeof data === 'object' && !data.$$typeof && data.constructor === Object) {
-      const processed: Record<string, any> = {};
-      for (const key of Object.keys(data)) {
-        processed[key] = processJosa(data[key]);
-      }
-      return processed;
-    }
-
-    return data;
-  }
-
-  const josaMessages = useMemo(() => {
-    if (locale === 'ko' && messages) {
-      try {
-        return processJosa(messages);
-      } catch (error) {
-        console.error('Josa processing crash prevented:', error);
-        return messages; // 에러 나면 기존 messages로 원상복구
-      }
-    }
-    return messages;
-  }, [locale, messages]);
-
   return (
     <BaseIntlProvider
       locale={locale}
-      messages={josaMessages}
+      messages={messages}
       onError={onProviderError}
       textComponent='span'
       {...props}
