@@ -2,6 +2,7 @@ import { Semaphore } from 'async-mutex';
 
 import type { LocaleData } from './global_locale';
 import { isLocaleLoaded, setLocale } from './global_locale';
+import Josa from './josa'; // [수정] Josa import
 
 const localeLoadingSemaphore = new Semaphore(1);
 
@@ -30,6 +31,17 @@ export async function loadLocale() {
 
     const { default: localeData } = await localeFile();
 
-    setLocale({ messages: localeData, locale });
+    // [수정] Josa 적용
+    let processedMessages = localeData;
+    if (locale === 'ko' && localeData) {
+      processedMessages = Object.fromEntries(
+        Object.entries(localeData).map(([key, val]) => [
+          key,
+          typeof val === 'string' ? Josa.c(val) : val,
+        ])
+      );
+    }
+
+    setLocale({ messages: processedMessages, locale });
   });
 }
