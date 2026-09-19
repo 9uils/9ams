@@ -6,7 +6,7 @@ import { isProduction } from 'mastodon/utils/environment';
 
 import { getLocale, isLocaleLoaded } from './global_locale';
 import { loadLocale } from './load_locale';
-import Josa from './josa.js';
+import Josa from './josa';
 
 function onProviderError(error: unknown) {
   // Silent the error, like upstream does
