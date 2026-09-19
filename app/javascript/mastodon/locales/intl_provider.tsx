@@ -46,14 +46,24 @@ export const IntlProvider: React.FC<
 
   const { locale, messages } = getLocale();
 
-  // 한국어('ko')일 경우 messages 내부의 모든 조사 문구를 Josa.c()로 사전 변환/가공
+  // Josa 적용
+  function processJosa(target: any): any {
+    if (typeof target === 'string') {
+      return Josa.c(target);
+    }
+    if (typeof target === 'object' && target !== null) {
+      const result: Record<string, any> = Array.isArray(target) ? [] : {};
+      for (const key of Object.keys(target)) {
+        result[key] = processJosa(target[key]);
+      }
+      return result;
+    }
+    return target;
+  }
+
   const josaMessages = useMemo(() => {
     if (locale === 'ko' && messages) {
-      const processed: Record<string, string> = {};
-      for (const [key, value] of Object.entries(messages)) {
-        processed[key] = typeof value === 'string' ? Josa.c(value) : value;
-      }
-      return processed;
+      return processJosa(messages);
     }
     return messages;
   }, [locale, messages]);
