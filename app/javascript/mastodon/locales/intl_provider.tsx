@@ -49,7 +49,7 @@ export const IntlProvider: React.FC<
   return (
     <BaseIntlProvider
       locale={locale}
-      messages={josaMessages}
+      messages={messages}
       onError={onProviderError}
       textComponent='span'
       {...props}
