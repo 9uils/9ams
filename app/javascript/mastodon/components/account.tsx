@@ -262,7 +262,7 @@ export const Account: React.FC<{
               </div>
             )}
 
-            {account?.note && (
+            {account?.note && !inReplyTo && (
               <div className="account__bio" dangerouslySetInnerHTML={{ __html: account.note }} />
             )}
           </div>
