@@ -46,10 +46,32 @@ export const IntlProvider: React.FC<
 
   const { locale, messages } = getLocale();
 
+  // Josa 적용
+  function processJosa(target: any): any {
+    if (typeof target === 'string') {
+      return Josa.c(target);
+    }
+    if (typeof target === 'object' && target !== null) {
+      const result: Record<string, any> = Array.isArray(target) ? [] : {};
+      for (const key of Object.keys(target)) {
+        result[key] = processJosa(target[key]);
+      }
+      return result;
+    }
+    return target;
+  }
+
+  const josaMessages = useMemo(() => {
+    if (locale === 'ko' && messages) {
+      return processJosa(messages);
+    }
+    return messages;
+  }, [locale, messages]);
+
   return (
     <BaseIntlProvider
       locale={locale}
-      messages={messages}
+      messages={josaMessages}
       onError={onProviderError}
       textComponent='span'
       {...props}
