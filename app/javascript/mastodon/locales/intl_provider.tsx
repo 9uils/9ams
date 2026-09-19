@@ -46,24 +46,36 @@ export const IntlProvider: React.FC<
 
   const { locale, messages } = getLocale();
 
-  // [수정] Josa 적용
-  function processJosa(target: any): any {
-    if (typeof target === 'string') {
-      return Josa.c(target);
+  // [수정] Josa 적용  
+  function processJosa(data: any): any {
+    if (typeof data === 'string') {
+      return Josa.c(data);
     }
-    if (typeof target === 'object' && target !== null) {
-      const result: Record<string, any> = Array.isArray(target) ? [] : {};
-      for (const key of Object.keys(target)) {
-        result[key] = processJosa(target[key]);
+
+    // 배열 처리
+    if (Array.isArray(data)) {
+      return data.map(processJosa);
+    }
+
+    if (data && typeof data === 'object' && !data.$$typeof && data.constructor === Object) {
+      const processed: Record<string, any> = {};
+      for (const key of Object.keys(data)) {
+        processed[key] = processJosa(data[key]);
       }
-      return result;
+      return processed;
     }
-    return target;
+
+    return data;
   }
 
   const josaMessages = useMemo(() => {
     if (locale === 'ko' && messages) {
-      return processJosa(messages);
+      try {
+        return processJosa(messages);
+      } catch (error) {
+        console.error('Josa processing crash prevented:', error);
+        return messages; // 에러 나면 기존 messages로 원상복구
+      }
     }
     return messages;
   }, [locale, messages]);
