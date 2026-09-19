@@ -46,7 +46,7 @@ export const IntlProvider: React.FC<
 
   const { locale, messages } = getLocale();
 
-  // Josa 적용
+  // [수정] Josa 적용
   function processJosa(target: any): any {
     if (typeof target === 'string') {
       return Josa.c(target);
