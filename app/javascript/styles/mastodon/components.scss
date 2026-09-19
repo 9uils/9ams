@@ -1021,6 +1021,8 @@ body>[data-popper-placement] {
   }
 }
 
+.compose-form .account__bio { display: none; } /* [수정] 답글 달 때 바이오 가리기 추가 */
+
 .dropdown-button {
   display: flex;
   align-items: center;
