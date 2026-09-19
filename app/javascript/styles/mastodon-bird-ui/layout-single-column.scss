@@ -4711,7 +4711,7 @@ body .compose-form .compose-form__uploads {
     order: 13;
     flex: 0 0 100%;
     width: 100%;
-    padding-bottom: 55px;
+    padding-bottom: 55px; /* [수정] 모바일에서 계정 전환 잘림 방지 */
   }
 
   .layout-single-column .navigation-panel .column-link[href="/follow_requests"] {
