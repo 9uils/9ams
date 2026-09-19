@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-class Api::V1::InstancesController < Api::V2::InstancesController  
+class Api::V1::InstancesController < Api::V2::InstancesController
   include DeprecationConcern
 
   deprecate_api '2022-11-14'
