@@ -1,6 +1,11 @@
 # frozen_string_literal: true
 
 class MultiAccounts::CallbacksController < ApplicationController
+  # This view is a complete HTML document on its own. Wrapping it in the
+  # application layout nests <html>, and worse, makes a popup that is about to
+  # close download the entire JS/CSS bundle. The window sat blank meanwhile.
+  layout false
+
   skip_before_action :verify_authenticity_token
   before_action :authenticate_user!
 

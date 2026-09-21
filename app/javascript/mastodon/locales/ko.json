@@ -113,6 +113,7 @@
   "account_switcher.popup_blocked": "팝업이 차단되었습니다. 이 사이트의 팝업을 허용해주세요.",
   "account_switcher.switch_account": "계정 전환",
   "account_switcher.switch_error": "계정 전환에 실패했습니다.",
+  "account_switcher.switch_not_applied": "계정을 전환하지 못했습니다. 다시 시도해주세요.",
   "admin.dashboard.daily_retention": "가입 후 일별 사용자 유지율",
   "admin.dashboard.monthly_retention": "가입 후 월별 사용자 유지율",
   "admin.dashboard.retention.average": "평균",

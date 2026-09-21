@@ -1,145 +1,136 @@
 import { createRoot } from 'react-dom/client';
 
+import { defineMessages } from 'react-intl';
+
+import { showAlert } from 'mastodon/actions/alerts';
+import { importFetchedAccount } from 'mastodon/actions/importer';
 import { setupBrowserNotifications } from 'mastodon/actions/notifications';
+import api, { setActiveAccountToken } from 'mastodon/api';
+import { MULTI_ACCOUNT_REQUEST_TIMEOUT } from 'mastodon/api/multi_accounts_constants';
+import type { ApiAccountJSON } from 'mastodon/api_types/accounts';
 import Mastodon from 'mastodon/containers/mastodon';
-import { me } from 'mastodon/initial_state';
+import { getAccessToken, me } from 'mastodon/initial_state';
 import * as perf from 'mastodon/performance';
 import ready from 'mastodon/ready';
 import { store } from 'mastodon/store';
-import api, { setActiveAccountToken } from 'mastodon/api';
-import { importFetchedAccount } from 'mastodon/actions/importer';
-import { setActiveAccountMeta } from 'mastodon/actions/multi_account';
+import { decryptToken } from 'mastodon/utils/multi_account_crypto';
 import {
   deleteEncryptedToken,
-  loadAllEntries,
   loadEncryptedToken,
 } from 'mastodon/utils/multi_account_db';
-import { decryptToken } from 'mastodon/utils/multi_account_crypto';
 import {
   clearActiveAccountIdInStorage,
   getActiveAccountIdFromStorage,
   setActiveAccountIdInStorage,
+  takeSwitchIntent,
 } from 'mastodon/utils/multi_account_storage';
 
 import { isProduction, isDevelopment } from './utils/environment';
 
-const redirectTo = (path: string): void => {
-  if (typeof window === 'undefined' || typeof window.location === 'undefined') {
+const messages = defineMessages({
+  switchNotApplied: {
+    id: 'account_switcher.switch_not_applied',
+    defaultMessage: 'The account could not be switched. Please try again.',
+  },
+});
+
+// Compares the marker left just before a switch with the account actually
+// signed in. A mismatch means the session the server handed back did not
+// stick, or stuck as a different account. Passing over it in silence looks to
+// the user like clicking did nothing at all.
+const reportUnappliedSwitch = (sessionAccountId: string | null): void => {
+  const intendedAccountId = takeSwitchIntent();
+
+  if (!intendedAccountId || intendedAccountId === sessionAccountId) {
     return;
   }
 
-  if (path === 'reload') {
-    window.location.reload();
+  console.error(
+    `[MultiAccount] Switch to ${intendedAccountId} did not stick; the session is ${
+      sessionAccountId ?? 'signed out'
+    }.`,
+  );
+  store.dispatch(showAlert({ message: messages.switchNotApplied }));
+};
+
+// Only the session cookie knows who is signed in.
+//
+// `MA_ACTIVE_ACCOUNT_ID` is no more than a hint recording the last account
+// switched to. It usually agrees with the session, but after an ordinary
+// logout followed by signing in as someone else, or after the session
+// expires, the pointer and the real session are left out of step.
+//
+// This code used to trust that pointer: it installed that account's stored
+// token as the global bearer and overwrote `meta.me` with it. The moment the
+// two disagreed,
+//   * the account manager ticked two entries as current (the session account
+//     and activeAccountId each claimed it) and refused to switch to either,
+//   * the account on screen drifted from the one posts went out as, and from
+//     the streaming connection.
+// Only a full logout, wiping storage, cleared it.
+//
+// So the pointer is rewritten to follow the session, and the global token is
+// simply the session token the page came with.
+async function initializeActiveAccountSession(): Promise<void> {
+  const sessionAccountId = me ?? null;
+
+  reportUnappliedSwitch(sessionAccountId);
+
+  if (!sessionAccountId) {
+    // Signed out. Leaving the pointer lets it come back at the next login.
+    clearActiveAccountIdInStorage();
     return;
   }
 
-  window.location.href = path;
-};
-
-const pickFallbackAccount = (
-  entries: Record<string, { lastUsedAt?: string | null }>,
-): string | null => {
-  const ids = Object.keys(entries);
-  if (ids.length === 0) {
-    return null;
+  if (getActiveAccountIdFromStorage() !== sessionAccountId) {
+    setActiveAccountIdInStorage(sessionAccountId);
   }
 
-  return ids
-    .map((id) => ({
-      id,
-      lastUsedAt: entries[id]?.lastUsedAt
-        ? new Date(entries[id].lastUsedAt as string).getTime()
-        : 0,
-    }))
-    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]?.id ?? ids[0];
-};
+  // Normally this is where it ends. The page's `meta.access_token` is
+  // guaranteed to belong to this session and `containers/mastodon.jsx` has
+  // already installed it. Installing the stored long-lived token on top would
+  // add a verify_credentials call to every boot, and split the screen from
+  // the requests whenever that token belongs to another account.
+  if (getAccessToken()) {
+    return;
+  }
 
-async function handleAccountInitError(accountId: string): Promise<void> {
-  console.warn(`Account ${accountId} failed to initialize, removing...`);
-
+  // Only when the page carries no token do we fall back to the stored one.
   try {
-    await deleteEncryptedToken(accountId);
-  } catch (error) {
-    console.error(`Failed to delete encrypted token for ${accountId}:`, error);
-  }
-
-  clearActiveAccountIdInStorage();
-
-  try {
-    const remainingEntries = await loadAllEntries();
-    const fallbackId = pickFallbackAccount(remainingEntries);
-
-    if (fallbackId) {
-      setActiveAccountIdInStorage(fallbackId);
-      redirectTo('/home');
-    } else {
-      redirectTo('/auth/sign_in');
-    }
-  } catch (error) {
-    console.error('Failed to determine fallback account after init error:', error);
-    redirectTo('/auth/sign_in');
-  }
-}
-
-const STORAGE_RETRY_LIMIT = 3;
-const STORAGE_RETRY_DELAY_MS = 100;
-
-const delay = (ms: number) =>
-  new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-
-const getActiveAccountIdWithRetry = async (): Promise<string | null> => {
-  let attempt = 0;
-  let activeAccountId = getActiveAccountIdFromStorage();
-
-  while (!activeAccountId && attempt < STORAGE_RETRY_LIMIT) {
-    attempt += 1;
-    await delay(STORAGE_RETRY_DELAY_MS);
-    activeAccountId = getActiveAccountIdFromStorage();
-  }
-
-  return activeAccountId;
-};
-
-async function initializeActiveAccountSession(): Promise<boolean> {
-  const activeAccountId = await getActiveAccountIdWithRetry();
-
-  if (!activeAccountId) {
-    return true;
-  }
-
-  try {
-    const encryptedPayload = await loadEncryptedToken(activeAccountId);
+    const encryptedPayload = await loadEncryptedToken(sessionAccountId);
 
     if (!encryptedPayload) {
-      clearActiveAccountIdInStorage();
-      redirectTo('/auth/sign_in');
-      return false;
+      return;
     }
 
     const token = await decryptToken(encryptedPayload);
-    setActiveAccountToken(token);
 
-    try {
-      const response = await api().get('/api/v1/accounts/verify_credentials');
-      store.dispatch(importFetchedAccount(response.data));
-      const resolvedAccountId = response.data?.id ?? activeAccountId;
-      if (resolvedAccountId) {
-        store.dispatch(setActiveAccountMeta(resolvedAccountId));
-      }
-    } catch (verifyError) {
+    // Use the stored token only after confirming it really is this
+    // account's.
+    const response = await api().get<ApiAccountJSON>(
+      '/api/v1/accounts/verify_credentials',
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: MULTI_ACCOUNT_REQUEST_TIMEOUT,
+      },
+    );
+
+    if (response.data.id !== sessionAccountId) {
+      // Another account's token is stored in this account's slot.
       console.error(
-        'Failed to verify credentials during active account initialization:',
-        verifyError,
+        `[MultiAccount] Stored token for ${sessionAccountId} belongs to ${response.data.id}; discarding it.`,
       );
+      await deleteEncryptedToken(sessionAccountId);
+      return;
     }
 
-    return true;
+    setActiveAccountToken(token);
+    store.dispatch(importFetchedAccount(response.data));
   } catch (error) {
-    console.error('Failed to restore active multi-account session:', error);
-    await handleAccountInitError(activeAccountId);
-    return false;
+    console.error(
+      'Failed to restore the stored token for the current session:',
+      error,
+    );
   }
 }
 
@@ -147,10 +138,7 @@ function main() {
   perf.start('main()');
 
   return ready(async () => {
-    const initialized = await initializeActiveAccountSession();
-    if (!initialized) {
-      return;
-    }
+    await initializeActiveAccountSession();
 
     const mountNode = document.getElementById('mastodon');
     if (!mountNode) {

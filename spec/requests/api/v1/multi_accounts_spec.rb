@@ -149,4 +149,144 @@ end
       end
     end
   end
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Every token the account switcher stores comes from here. While it stored
+  # the page's session token instead, `ensure_refresh_token_valid!` rejected
+  # each switch to that account with a 422.
+  # ═══════════════════════════════════════════════════════════════════════════
+  describe 'POST /api/v1/multi_accounts/refresh_token' do
+    let(:user) { Fabricate(:user) }
+
+    let!(:multi_account_app) do
+      Doorkeeper::Application.create!(
+        name: 'MultiAccount',
+        redirect_uri: 'https://example.com/callback',
+        scopes: 'read write follow push'
+      )
+    end
+
+    let!(:web_app) do
+      Doorkeeper::Application.create!(
+        name: 'Web',
+        redirect_uri: 'https://example.com/web',
+        scopes: 'read write follow push',
+        superapp: true
+      )
+    end
+
+    let(:session_token) do
+      Fabricate(:access_token, application: web_app, resource_owner_id: user.id, scopes: 'read write follow')
+    end
+
+    let(:headers) { { 'Authorization' => "Bearer #{session_token.token}" } }
+
+    def long_lived_tokens
+      Doorkeeper::AccessToken.long_lived_refresh.not_revoked.where(resource_owner_id: user.id)
+    end
+
+    before do
+      @original_multi_account_config = Rails.configuration.x.multi_account.dup
+      Rails.configuration.x.multi_account[:client_id] = multi_account_app.uid
+    end
+
+    after do
+      Rails.configuration.x.multi_account = ActiveSupport::HashWithIndifferentAccess.new(@original_multi_account_config)
+    end
+
+    context 'without any authentication' do
+      # `require_authenticated_user!` is conditional, so this action used to
+      # be reachable signed out and died on `current_user.id` with a 500.
+      it 'returns 401 and mints nothing' do
+        post '/api/v1/multi_accounts/refresh_token'
+
+        expect(response).to have_http_status(401)
+        expect(long_lived_tokens).to be_empty
+      end
+    end
+
+    context 'with a third-party application token' do
+      let(:third_party_token) do
+        Fabricate(:access_token, application: Fabricate(:application), resource_owner_id: user.id, scopes: 'read')
+      end
+
+      # The token that comes back belongs to the multi-account application, so
+      # it survives the user revoking the third-party app. Only the web
+      # interface may call this.
+      it 'refuses to mint a long-lived token' do
+        post '/api/v1/multi_accounts/refresh_token', headers: { 'Authorization' => "Bearer #{third_party_token.token}" }
+
+        expect(response).to have_http_status(403)
+        expect(long_lived_tokens).to be_empty
+      end
+    end
+
+    context 'with the web interface session token' do
+      it 'mints a token the switcher can actually use' do
+        post '/api/v1/multi_accounts/refresh_token', headers: headers
+
+        expect(response).to have_http_status(200)
+
+        minted = Doorkeeper::AccessToken.find_by(token: response.parsed_body[:token])
+
+        expect(minted).to have_attributes(
+          application_id: multi_account_app.id,
+          resource_owner_id: user.id,
+          multi_account: true,
+          long_lived: true,
+          purpose: 'multi_account_refresh'
+        )
+        expect(minted.long_lived_refresh?).to be true
+        expect(response.parsed_body[:account][:id]).to eq user.account.id.to_s
+      end
+
+      # The switcher calls this whenever no token is stored - a new browser, a
+      # private window. Minting one each time piles up ten-year tokens that are
+      # never revoked, because `revoke_access!` skips them on purpose.
+      it 'reuses the existing token instead of piling up new ones' do
+        expect { 3.times { post '/api/v1/multi_accounts/refresh_token', headers: headers } }
+          .to change { long_lived_tokens.count }.from(0).to(1)
+      end
+
+      it 'does not reuse a revoked token' do
+        post '/api/v1/multi_accounts/refresh_token', headers: headers
+        first = response.parsed_body[:token]
+        Doorkeeper::AccessToken.find_by(token: first).revoke
+
+        post '/api/v1/multi_accounts/refresh_token', headers: headers
+
+        expect(response.parsed_body[:token]).to_not eq first
+        expect(long_lived_tokens.count).to eq 1
+      end
+
+      it 'does not widen the scopes the caller already holds' do
+        narrow = Fabricate(:access_token, application: web_app, resource_owner_id: user.id, scopes: 'read')
+
+        post '/api/v1/multi_accounts/refresh_token', headers: { 'Authorization' => "Bearer #{narrow.token}" }
+
+        expect(response.parsed_body[:scope]).to eq 'read'
+      end
+
+      it 'does not hand a narrower caller the wider token it already minted' do
+        post '/api/v1/multi_accounts/refresh_token', headers: headers
+        wide = response.parsed_body[:token]
+
+        narrow = Fabricate(:access_token, application: web_app, resource_owner_id: user.id, scopes: 'read')
+        post '/api/v1/multi_accounts/refresh_token', headers: { 'Authorization' => "Bearer #{narrow.token}" }
+
+        expect(response.parsed_body[:token]).to_not eq wide
+        expect(response.parsed_body[:scope]).to eq 'read'
+      end
+    end
+
+    context 'when the multi-account client is not configured' do
+      before { Rails.configuration.x.multi_account[:client_id] = nil }
+
+      it 'returns 404 rather than a 500' do
+        post '/api/v1/multi_accounts/refresh_token', headers: headers
+
+        expect(response).to have_http_status(404)
+      end
+    end
+  end
 end

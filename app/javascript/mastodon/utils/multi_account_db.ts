@@ -199,13 +199,27 @@ export const loadAllEntries = async (): Promise<Record<string, MultiAccountEntry
       payload: EncryptedPayload;
     }> = [];
 
+    // Records whose key and `entry.id` disagree are repaired here. The two
+    // should always match, but older switch code keyed by "the account that
+    // was asked for" while writing "the token's real owner" into the entry.
+    // Left alone, the list draws rows by owner id while the switch looks the
+    // token up by key, so clicking only ever says the stored token is
+    // missing.
+    const misKeyedRecords: { key: string; record: StoredAccountRecord }[] = [];
+
     for (const key of keys) {
       const stored = await db.get(STORE_NAME, key);
       if (stored && typeof key === 'string') {
         const normalized = normalizeRecord(stored);
         if (normalized) {
           if (normalized.entry) {
-            entries[key] = normalized.entry;
+            const entryId = normalized.entry.id;
+
+            if (typeof entryId === 'string' && entryId && entryId !== key) {
+              misKeyedRecords.push({ key, record: normalized });
+            } else {
+              entries[key] = normalized.entry;
+            }
           } else {
             legacyRecords.push({
               id: key,
@@ -213,6 +227,30 @@ export const loadAllEntries = async (): Promise<Record<string, MultiAccountEntry
             });
           }
         }
+      }
+    }
+
+    for (const { key, record } of misKeyedRecords) {
+      const entry = record.entry;
+
+      if (!entry) {
+        continue;
+      }
+
+      try {
+        // If a correct record already exists, keep it and drop this row.
+        if (!entries[entry.id]) {
+          await db.put(STORE_NAME, record, entry.id);
+          entries[entry.id] = entry;
+        }
+
+        await db.delete(STORE_NAME, key);
+      } catch (error) {
+        console.error(
+          `Failed to re-key the multi-account entry stored under ${key}:`,
+          error,
+        );
+        entries[entry.id] = entry;
       }
     }
 

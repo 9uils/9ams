@@ -1,7 +1,6 @@
 import { Map as ImmutableMap } from 'immutable';
 
 import { changeLayout } from 'mastodon/actions/app';
-import { MULTI_ACCOUNT_SET_ACTIVE_ACCOUNT_META } from 'mastodon/actions/multi_account';
 import { STORE_HYDRATE } from 'mastodon/actions/store';
 import { layoutFromWindow } from 'mastodon/is_mobile';
 
@@ -11,13 +10,19 @@ const initialState = ImmutableMap({
   permissions: '0',
 });
 
+// `me` is never rewritten here.
+//
+// The multi-account boot code used to overwrite `meta.me` with the "last
+// switched account" pointer kept in localStorage. Whenever the server session
+// held a different account, the "me" on screen and the account requests
+// actually went out as drifted apart: the account manager ticked two entries
+// as current and both of them refused to switch. Only the value the session
+// decided (STORE_HYDRATE) is used.
 export default function meta(state = initialState, action) {
   switch(action.type) {
   case STORE_HYDRATE:
     // we do not want `access_token` to be stored in the state
     return state.merge(action.state.get('meta')).delete('access_token').set('permissions', action.state.getIn(['role', 'permissions']));
-  case MULTI_ACCOUNT_SET_ACTIVE_ACCOUNT_META:
-    return state.set('me', action.payload.accountId);
   case changeLayout.type:
     return state.set('layout', action.payload.layout);
   default:

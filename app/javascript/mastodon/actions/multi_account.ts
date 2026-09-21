@@ -10,7 +10,6 @@ import {
   deleteEncryptedToken,
   loadEncryptedToken,
   saveEncryptedToken,
-  loadAllEntries,
 } from '../utils/multi_account_db';
 import { decryptToken, encryptToken } from '../utils/multi_account_crypto';
 import { MULTI_ACCOUNT_REQUEST_TIMEOUT } from '../api/multi_accounts_constants';
@@ -18,85 +17,9 @@ import { importFetchedAccount } from './importer';
 import SwitchLogger from '../utils/switch_logger';
 import {
   clearActiveAccountIdIfMatches,
-  getActiveAccountIdFromStorage,
+  markSwitchIntent,
   setActiveAccountIdInStorage,
 } from '../utils/multi_account_storage';
-
-const refreshOAuthToken = async (
-  dispatch: AppDispatch,
-  entry: MultiAccountEntry,
-): Promise<string> => {
-  const {
-    fetchAuthorizeEntry,
-    consumeAuthorizationCode,
-    restoreMultiAccountSession,
-  } = await import('../api/multi_accounts');
-  const { openOAuthPopup } = await import(
-    '../features/multi_account/callback_handler'
-  );
-
-  const pending = { state: null as string | null, nonce: null as string | null };
-
-  try {
-    const authorizeEntry = await fetchAuthorizeEntry({ forceLogin: false });
-    pending.state = authorizeEntry.state;
-    pending.nonce = authorizeEntry.nonce;
-
-    const width = 600;
-    const height = 700;
-    const left = window.screenX + (window.outerWidth - width) / 2;
-    const top = window.screenY + (window.outerHeight - height) / 2;
-
-    const blankPopup = window.open(
-      'about:blank',
-      'multi-account-oauth',
-      `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,location=no`,
-    );
-
-    if (!blankPopup) {
-      throw new Error('팝업이 차단되었습니다. 브라우저에서 팝업을 허용해주세요.');
-    }
-
-    const { authorize_url, state, nonce } = authorizeEntry;
-    const callback = await openOAuthPopup(authorize_url, state, blankPopup);
-
-    const { token, account } = await consumeAuthorizationCode({
-      state: callback.state,
-      nonce,
-      authorization_code: callback.code,
-    });
-
-    const refreshedEntry: MultiAccountEntry = {
-      ...entry,
-      id: account.id ?? entry.id,
-      acct: account.acct ?? entry.acct,
-      displayName:
-        account.display_name ?? account.username ?? entry.displayName,
-      avatar: account.avatar ?? account.avatar_static ?? entry.avatar,
-      encryptedTokenRef: entry.encryptedTokenRef,
-      lastUsedAt: new Date().toISOString(),
-    };
-
-    await dispatch(registerAccount(refreshedEntry, token) as unknown as any);
-    return token;
-  } catch (error) {
-    if (pending.state && pending.nonce) {
-      try {
-        await restoreMultiAccountSession({
-          state: pending.state,
-          nonce: pending.nonce,
-        });
-      } catch (restoreError) {
-        console.error(
-          'Failed to restore multi-account session after token refresh failure:',
-          restoreError,
-        );
-      }
-    }
-
-    throw error;
-  }
-};
 
 type CsrfInfo = {
   csrfToken: string;
@@ -132,8 +55,6 @@ export const MULTI_ACCOUNT_REGISTER = 'MULTI_ACCOUNT_REGISTER';
 export const MULTI_ACCOUNT_SWITCH = 'MULTI_ACCOUNT_SWITCH';
 export const MULTI_ACCOUNT_REMOVE = 'MULTI_ACCOUNT_REMOVE';
 export const MULTI_ACCOUNT_TOUCH = 'MULTI_ACCOUNT_TOUCH';
-export const MULTI_ACCOUNT_SET_ACTIVE_ACCOUNT_META =
-  'MULTI_ACCOUNT_SET_ACTIVE_ACCOUNT_META';
 
 // Action creators
 export const hydrateMultiAccountAction = (payload: {
@@ -164,59 +85,7 @@ export const touchAccountAction = (accountId: string) => ({
   payload: { accountId },
 });
 
-export const setActiveAccountMeta = (accountId: string) => ({
-  type: MULTI_ACCOUNT_SET_ACTIVE_ACCOUNT_META,
-  payload: { accountId },
-});
-
 // Thunks
-export const hydrateMultiAccount =
-  () => async (dispatch: AppDispatch, getState: GetState) => {
-    try {
-      const storedEntries = await loadAllEntries();
-      const entryIds = Object.keys(storedEntries);
-
-      const state: any = getState();
-      const hasGetIn = typeof state?.getIn === 'function';
-      const existingActive = hasGetIn
-        ? state.getIn(['multiAccount', 'activeAccountId'])
-        : state?.multiAccount?.activeAccountId ?? null;
-      const storedActiveId = getActiveAccountIdFromStorage();
-
-      let activeAccountId: string | null = null;
-
-      if (storedActiveId && entryIds.includes(storedActiveId)) {
-        activeAccountId = storedActiveId;
-      } else {
-        if (storedActiveId) {
-          clearActiveAccountIdIfMatches(storedActiveId);
-        }
-
-      if (existingActive && entryIds.includes(existingActive)) {
-        activeAccountId = existingActive;
-      } else if (entryIds.length > 0) {
-        activeAccountId = entryIds
-          .map((id) => storedEntries[id])
-          .filter((entry) => entry?.lastUsedAt)
-          .sort(
-            (a, b) =>
-              new Date(b?.lastUsedAt ?? 0).getTime() -
-              new Date(a?.lastUsedAt ?? 0).getTime(),
-          )[0]?.id ?? entryIds[0] ?? null;
-        }
-      }
-
-      dispatch(
-        hydrateMultiAccountAction({
-          activeAccountId,
-          accounts: storedEntries,
-        }),
-      );
-    } catch (error) {
-      console.error('Failed to hydrate multi-account state:', error);
-    }
-  };
-
 export const registerAccount =
   (entry: MultiAccountEntry, token: string) =>
   async (dispatch: AppDispatch) => {
@@ -245,6 +114,19 @@ export const switchAccount =
     if (typeof performance !== 'undefined' && performance.mark) {
       performance.mark(`multi_account_switch_start_${accountId}`);
     }
+
+    // Whether the server session has already changed. A failure after that
+    // point cannot be allowed to end quietly.
+    let sessionSwitched = false;
+
+    const reloadToMatchSession = () => {
+      if (
+        typeof window !== 'undefined' &&
+        typeof window.location !== 'undefined'
+      ) {
+        window.location.reload();
+      }
+    };
 
     try {
       const state: any = getState();
@@ -279,36 +161,33 @@ export const switchAccount =
       try {
         refreshToken = await decryptToken(encryptedPayload);
       } catch (decryptError) {
-        // NOTE: 절대로 여기서 resetCryptoKey()를 호출하면 안 된다.
-        // 마스터 키를 삭제하면 이 계정뿐 아니라 저장된 '모든' 계정의 토큰이
-        // 영구적으로 복호화 불능이 되며, 재시도는 새 키로 옛 암호문을 풀 수 없어 무의미하다.
-        // 대신 이 계정의 토큰만 죽은 것으로 간주하고 구조화된 에러로 표면화한다.
+        // NOTE: never call resetCryptoKey() here. Dropping the master key
+        // makes the stored tokens of every account permanently
+        // undecryptable, not just this one, and retrying is pointless
+        // because a new key cannot open old ciphertext. Treat only this
+        // account's token as dead and surface a structured error.
         console.error(
           `Failed to decrypt refresh token for account ${accountId}:`,
           decryptError,
         );
-        SwitchLogger.logSwitchFailure(
-          accountId,
-          'failed_to_decrypt_refresh_token',
-          startTime,
-        );
-
+        // Do not call `logSwitchFailure` here; the outer catch below always
+        // records it once. Calling both files the same failure twice to the
+        // server log and to Sentry.
         throw new MultiAccountSwitchError(
           SwitchErrorCode.TOKEN_INVALID,
           '저장된 계정 토큰을 복호화할 수 없습니다. 계정을 다시 추가해주세요.',
         );
       }
 
-      try {
-        document.cookie.split(';').forEach((cookie) => {
-          const trimmed = cookie.replace(/^ +/, '');
-          const eqPos = trimmed.indexOf('=');
-          const name = eqPos > -1 ? trimmed.substring(0, eqPos) : trimmed;
-          document.cookie = `${name}=;expires=${new Date(0).toUTCString()};path=/`;
-        });
-      } catch (cookieError) {
-        console.warn('[Switch] Failed to clear cookies:', cookieError);
-      }
+      // No cookies are cleared here. This used to wipe `document.cookie`
+      // wholesale before calling refresh. The server issues a new session
+      // cookie via `reset_session` + `sign_in` anyway, so there was nothing
+      // to gain - and when refresh failed the tab was left with no session
+      // cookie at all. The screen still drew the old account while the server
+      // considered it signed out, so reloading showed the login page, and
+      // logging out from there made Devise print `already_signed_out`
+      // ("Signed out successfully."). That is what made a single 422 look
+      // like the account had been wiped. The server cleans up the rest.
 
       const entryRecord =
         typeof accountsSource?.get === 'function'
@@ -336,22 +215,87 @@ export const switchAccount =
           }
           return response;
         } catch (refreshError) {
-        const status = (refreshError as any)?.response?.status;
-        console.warn(
-          `Failed to refresh session for account ${accountId}:`,
-          refreshError,
-        );
+          const status = (refreshError as any)?.response?.status as
+            | number
+            | undefined;
+          const serverMessage = (refreshError as any)?.response?.data?.error as
+            | string
+            | undefined;
 
-        if (status && [400, 401, 403, 422].includes(status)) {
+          console.warn(
+            `Failed to refresh session for account ${accountId}:`,
+            refreshError,
+          );
+
+          // Only a dead stored token earns "add the account again". 401 means
+          // revoked or invalid; 422 means `ensure_refresh_token_valid!`
+          // refused it as not a multi-account token. Clicking again gives the
+          // same answer either way, so drop the dead token here. Otherwise
+          // the same error repeats forever, because `ensureAccountStored`
+          // leaves an account alone once a token exists. Dropped, it refills
+          // itself with a usable token the next time that account is this
+          // browser's session.
+          if (status === 401 || status === 422) {
+            try {
+              await deleteEncryptedToken(accountId);
+            } catch (deleteError) {
+              console.error(
+                `Failed to drop the dead token for account ${accountId}:`,
+                deleteError,
+              );
+            }
+
+            throw new MultiAccountSwitchError(
+              SwitchErrorCode.TOKEN_INVALID,
+              '저장된 계정 토큰을 쓸 수 없습니다. 계정을 다시 로그인하여 추가해주세요.',
+            );
+          }
+
+          // Everything else is not a token problem. 403 means the feature is
+          // off (`refresh_flow`), the user is outside the rollout, or the
+          // account is suspended; 429 is rate limiting; 404 means the account
+          // is gone. Folding these into "the token expired" would recommend
+          // deleting a perfectly healthy entry.
+          //
+          // The server's wording is not shown as-is: it is English and mixes
+          // in developer-facing text such as "refresh_token is required".
+          // Whatever is needed to diagnose is already in the `console.warn`
+          // above.
+          const rejectionMessage = (() => {
+            if (status === 429) {
+              return '요청이 너무 잦습니다. 잠시 후 다시 시도해주세요.';
+            }
+
+            if (status === 403) {
+              return '지금은 이 계정으로 전환할 수 없습니다. 계정이 정지되었거나 계정 전환이 꺼져 있을 수 있습니다.';
+            }
+
+            if (status === 404) {
+              return '그 계정을 찾을 수 없습니다. 삭제되었거나 이전되었을 수 있습니다.';
+            }
+
+            return '계정 전환에 실패했습니다. 잠시 후 다시 시도해주세요.';
+          })();
+
+          // What the server said stays in the console.
+          if (serverMessage) {
+            console.warn(`[MultiAccount] refresh rejected: ${serverMessage}`);
+          }
+
           throw new MultiAccountSwitchError(
-            SwitchErrorCode.TOKEN_INVALID,
-            '저장된 계정 토큰이 만료되었거나 사용할 수 없습니다. 계정을 다시 로그인하여 추가해주세요.',
+            SwitchErrorCode.REFRESH_REJECTED,
+            rejectionMessage,
           );
         }
-
-        throw refreshError;
-      }
       })();
+
+      // From here on the server session has already changed: `refresh` ran
+      // `reset_session` + `sign_in`. Whatever happens next, this page is
+      // holding somebody else's session, so merely throwing would leave the
+      // screen (old account) and the session (new account) split apart - and
+      // the CSRF token is already void. The same holds if the response came
+      // back without a token.
+      sessionSwitched = true;
 
       const sessionToken = refreshResponse?.data?.token as string | undefined;
 
@@ -364,6 +308,11 @@ export const switchAccount =
 
       setActiveAccountToken(sessionToken);
 
+      // What counts is the token's real owner. Records can exist where the
+      // key (accountId) and the owner disagree; left alone, clicking that
+      // entry drags in somebody else's session every time. Below, the
+      // mismatched key is deleted and the record rewritten under the
+      // confirmed id.
       const updateEntryMetadata = async (
         accountData: ApiAccountJSON | null,
       ): Promise<void> => {
@@ -393,18 +342,36 @@ export const switchAccount =
           lastUsedAt: new Date().toISOString(),
         };
 
+        if (resolvedId !== accountId) {
+          console.error(
+            `[MultiAccount] Stored token for ${accountId} belongs to ${resolvedId}; repairing the stored entry.`,
+          );
+
+          try {
+            await deleteEncryptedToken(accountId);
+          } catch (deleteError) {
+            console.error(
+              `Failed to drop the mismatched entry for account ${accountId}:`,
+              deleteError,
+            );
+          }
+
+          dispatch(removeAccountAction(accountId));
+          clearActiveAccountIdIfMatches(accountId);
+        }
+
         dispatch(registerAccountAction(normalizedEntry));
 
         if (currentEncryptedPayload) {
           try {
             await saveEncryptedToken(
-              accountId,
+              resolvedId,
               currentEncryptedPayload,
               normalizedEntry,
             );
           } catch (saveError) {
             console.error(
-              `Failed to update stored metadata for account ${accountId}:`,
+              `Failed to update stored metadata for account ${resolvedId}:`,
               saveError,
             );
           }
@@ -445,12 +412,20 @@ export const switchAccount =
 
       await updateEntryMetadata(verifiedAccount);
 
-      setActiveAccountIdInStorage(accountId);
-      SwitchLogger.logSwitchSuccess(accountId, startTime);
+      // The session already changed on the server. The pointer has to name
+      // the account actually signed in, not the one that was asked for.
+      const activatedAccountId = verifiedAccount?.id ?? accountId;
 
-      if (typeof window !== 'undefined' && typeof window.location !== 'undefined') {
-        window.location.reload();
-      }
+      setActiveAccountIdInStorage(activatedAccountId);
+      // The marker records the account the user clicked. If after the reload
+      // the session is not that account - the cookie did not stick, or the
+      // stored token belonged to someone else and signed us in as them -
+      // `main.tsx` says so. Previously the screen simply came back unchanged
+      // with no word, which looked like clicking did nothing.
+      markSwitchIntent(accountId);
+      SwitchLogger.logSwitchSuccess(activatedAccountId, startTime);
+
+      reloadToMatchSession();
 
       return sessionToken;
     } catch (error) {
@@ -458,7 +433,17 @@ export const switchAccount =
         error instanceof Error ? error.message : String(error);
       SwitchLogger.logSwitchFailure(accountId, errorMessage, startTime);
       console.error('Failed to switch account:', error);
-      console.error('[Switch] FAILED:', error);
+
+      if (sessionSwitched) {
+        // A failure after the session already changed. Recording the account
+        // the user clicked and reloading keeps the screen in step with
+        // whatever session we ended up in, and `main.tsx` reports it when
+        // that turns out to be a different account.
+        markSwitchIntent(accountId);
+        reloadToMatchSession();
+        return null;
+      }
+
       throw error;
     }
   };

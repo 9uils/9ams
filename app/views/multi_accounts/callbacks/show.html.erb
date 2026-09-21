@@ -3,6 +3,7 @@
 <head>
   <title>Multi-Account Authorization</title>
   <meta charset="utf-8">
+  <meta name="robots" content="noindex, nofollow">
   <script nonce="<%= content_security_policy_nonce %>">
     (function() {
       var closeTimeout = null;
@@ -10,84 +11,145 @@
       var messageSent = false;
       var targetOrigin = '<%= @redirect_origin.present? ? j(@redirect_origin) : '' %>';
 
-      // Listen for close confirmation from parent window
+      // This screen may not be a popup at all.
+      //
+      // When the add-account flow is abandoned, /oauth/authorize is left in
+      // the session as Devise's post-sign-in destination, and the next
+      // sign-in rides that authorize URL all the way here in an ordinary tab.
+      // There is no opener for postMessage to reach, and window.close() only
+      // works on script-opened windows, so nothing happens. That is how a
+      // blank window reading "this window will close automatically" used to
+      // sit there forever. Send those home instead.
+      var hasOpener = false;
+
+      try {
+        hasOpener = !!(window.opener && !window.opener.closed);
+      } catch (e) {
+        hasOpener = false;
+      }
+
+      function goHome() {
+        window.location.replace('/');
+      }
+
+      // Try to close; if it does not close (not a popup), go home.
+      function closeOrGoHome() {
+        if (closeInitiated) {
+          return;
+        }
+
+        closeInitiated = true;
+
+        try {
+          window.close();
+        } catch (e) {
+          console.warn('Could not close window automatically:', e);
+        }
+
+        window.setTimeout(goHome, 500);
+      }
+
+      function showStranded() {
+        var notice = document.getElementById('ma-notice');
+        var fallback = document.getElementById('ma-fallback');
+
+        if (notice) {
+          notice.hidden = true;
+        }
+
+        if (fallback) {
+          fallback.hidden = false;
+        }
+      }
+
+      // Listen for close confirmation from parent window.
+      // Only a same-origin opener may tell this window to close.
       window.addEventListener('message', function(event) {
+        if (event.origin !== window.location.origin) {
+          return;
+        }
+
+        if (!window.opener || event.source !== window.opener) {
+          return;
+        }
+
         var data = event.data;
 
         if (data && data.type === 'multi-account-close-popup') {
           if (closeTimeout) {
             clearTimeout(closeTimeout);
           }
-          closeInitiated = true;
-          window.close();
+
+          closeOrGoHome();
         }
       });
 
       // Function to send message to opener
       function sendMessage(messageType, payload) {
-        if (messageSent) {
+        if (messageSent || !hasOpener) {
           return;
         }
 
-        if (window.opener && !window.opener.closed) {
-          try {
-            // Try with specific origin first, fallback to current origin or '*'
-            var origin = targetOrigin || window.location.origin || '*';
-            window.opener.postMessage({
-              type: messageType,
-              state: '<%= j @state %>',
-              code: '<%= j @code %>',
-              error: payload.error || null
-            }, origin);
-            messageSent = true;
-          } catch (e) {
-            console.error('Failed to send message:', e);
-            // Retry with current origin if targetOrigin was different
-            if (targetOrigin && targetOrigin !== window.location.origin) {
-              try {
-                window.opener.postMessage({
-                  type: messageType,
-                  state: '<%= j @state %>',
-                  code: '<%= j @code %>',
-                  error: payload.error || null
-                }, window.location.origin);
-                messageSent = true;
-              } catch (e2) {
-                // Do NOT fall back to a wildcard ('*') targetOrigin here: the payload
-                // contains the OAuth authorization code, and '*' would expose it to any
-                // origin that can reference this window's opener.
-                console.error('Failed to send message with current origin:', e2);
-              }
+        try {
+          // Do NOT fall back to a wildcard ('*') targetOrigin: the payload
+          // contains the OAuth authorization code, and '*' would expose it to
+          // any origin that can reference this window's opener.
+          var origin = targetOrigin || window.location.origin;
+          window.opener.postMessage({
+            type: messageType,
+            state: '<%= j @state %>',
+            code: '<%= j @code %>',
+            error: payload.error || null
+          }, origin);
+          messageSent = true;
+        } catch (e) {
+          console.error('Failed to send message:', e);
+
+          // Retry with current origin if targetOrigin was different
+          if (targetOrigin && targetOrigin !== window.location.origin) {
+            try {
+              window.opener.postMessage({
+                type: messageType,
+                state: '<%= j @state %>',
+                code: '<%= j @code %>',
+                error: payload.error || null
+              }, window.location.origin);
+              messageSent = true;
+            } catch (e2) {
+              console.error('Failed to send message with current origin:', e2);
             }
           }
         }
       }
 
       <% if @error.present? %>
-        // Send error to opener
-        sendMessage('multi-account-error', { error: '<%= j @error %>' });
+        if (hasOpener) {
+          sendMessage('multi-account-error', { error: '<%= j @error %>' });
 
-        // Close window after waiting for parent response or timeout
-        closeTimeout = setTimeout(function() {
-          if (!closeInitiated) {
-            window.close();
-          }
-        }, 5000);
+          // Close window after waiting for parent response or timeout
+          closeTimeout = setTimeout(closeOrGoHome, 5000);
+        } else {
+          // Nobody to notify. The error text is for a person to read, so do
+          // not clear it away; just offer a link back.
+          document.addEventListener('DOMContentLoaded', showStranded);
+        }
       <% else %>
-        // Send success data to opener
-        sendMessage('multi-account-callback', {});
+        if (hasOpener) {
+          sendMessage('multi-account-callback', {});
 
-        // Wait for parent window to confirm before closing (with 10s timeout)
-        closeTimeout = setTimeout(function() {
-          if (!closeInitiated) {
-            // Try to close, but don't fail if it doesn't work
-            try {
-              window.close();
-            } catch (e) {
-              console.warn('Could not close window automatically:', e);
-            }
-          }
-        }, 10000);
+          // Wait for parent window to confirm before closing (with 10s timeout)
+          closeTimeout = setTimeout(closeOrGoHome, 10000);
+        } else {
+          // Authorization is done and the session already belongs to that
+          // account. There is nothing to read, so clear the authorization
+          // code out of the address bar right away.
+          //
+          // Try closing first: the opener may be missing because this is not
+          // a popup, or because it is a popup whose opener the user closed.
+          // In the latter case closing beats turning a small popup into a
+          // timeline.
+          closeOrGoHome();
+        }
       <% end %>
     })();
   </script>
@@ -96,10 +158,14 @@
   <% if @error.present? %>
     <h1>Authorization Error</h1>
     <p><%= @error %></p>
-    <p>This window will close automatically...</p>
+    <p id='ma-notice'>This window will close automatically...</p>
   <% else %>
     <h1>Authorization Successful</h1>
-    <p>This window will close automatically...</p>
+    <p id='ma-notice'>This window will close automatically...</p>
   <% end %>
+  <p id='ma-fallback' hidden><a href='/'>Return to <%= site_hostname %></a></p>
+  <noscript>
+    <p><a href='/'>Return to <%= site_hostname %></a></p>
+  </noscript>
 </body>
 </html>

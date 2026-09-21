@@ -69,4 +69,36 @@ RSpec.describe Oauth::AuthorizationsController do
       "/oauth/authorize?client_id=#{app.uid}&redirect_uri=http%3A%2F%2Flocalhost%2F&response_type=code&scope=read"
     end
   end
+
+  # The consent POST (and the deny DELETE) carry no query string. Back when
+  # they also recorded a return location, `user_return_to` became a bare
+  # `/oauth/authorize`, and any later sign-in was sent there, where Doorkeeper
+  # answers "missing required parameter: client_id".
+  describe 'the stored return location' do
+    let!(:user) { Fabricate(:user) }
+
+    let(:authorize_params) do
+      { client_id: app.uid, response_type: 'code', redirect_uri: 'http://localhost/', scope: 'read' }
+    end
+
+    before { sign_in user, scope: :user }
+
+    it 'is not written by the consent form POST' do
+      post :create, params: authorize_params
+
+      expect(controller.stored_location_for(:user)).to be_nil
+    end
+
+    it 'is not written by the deny DELETE' do
+      delete :destroy, params: authorize_params
+
+      expect(controller.stored_location_for(:user)).to be_nil
+    end
+
+    it 'is still written by the authorize GET' do
+      get :new, params: authorize_params
+
+      expect(controller.stored_location_for(:user)).to_not be_nil
+    end
+  end
 end

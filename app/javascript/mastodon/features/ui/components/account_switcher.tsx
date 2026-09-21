@@ -23,7 +23,7 @@ import { Icon } from 'mastodon/components/icon';
 import { CircularProgress } from 'mastodon/components/circular_progress';
 import { showAlert } from 'mastodon/actions/alerts';
 import type { Account } from 'mastodon/models/account';
-import api, { currentAuthorizationToken } from 'mastodon/api';
+import api from 'mastodon/api';
 import { MULTI_ACCOUNT_REQUEST_TIMEOUT } from 'mastodon/api/multi_accounts_constants';
 import {
   registerAccount,
@@ -42,8 +42,9 @@ import {
 import { clearActiveAccountIdInStorage } from 'mastodon/utils/multi_account_storage';
 import { logOut } from 'mastodon/utils/log_out';
 
-// add-account 전체 흐름의 안전망(backstop). 개별 api 호출(15s)·OAuth 팝업(90s)
-// 타임아웃을 모두 넘기는 예기치 못한 hang에 대비해 UI 플래그를 강제 해제한다.
+// Backstop for the whole add-account flow. Releases the UI flags if something
+// hangs past every individual timeout (15s per api call, 90s for the OAuth
+// popup).
 const ADD_ACCOUNT_WATCHDOG_TIMEOUT = 100000;
 
 type MultiAccountsModule = typeof import('mastodon/api/multi_accounts');
@@ -143,6 +144,12 @@ interface AccountSwitcherTriggerArgs {
 interface AccountSwitcherProps {
   renderTrigger?: (options: AccountSwitcherTriggerArgs) => ReactNode;
 }
+// An empty string does not count as a value. `??` lets '' through, which left
+// accounts with no display name showing as a blank row.
+const firstNonEmpty = (
+  ...values: (string | null | undefined)[]
+): string => values.find((value) => !!value && value.length > 0) ?? '';
+
 const knownErrorMessages: Record<string, MessageDescriptor> = {
   'OAuth popup was closed before authorization completed': messages.oauthPopupClosed,
 };
@@ -152,11 +159,13 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
   const dispatch = useAppDispatch();
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoggingOutAll, setIsLoggingOutAll] = useState(false);
-  // ref 기반 재진입 가드: isProcessing state는 클로저에서 stale 할 수 있어
-  // 동시 실행 방지에는 ref를 사용한다.
+  // Ref-based re-entry guard: the isProcessing state can be stale inside a
+  // closure, so a ref is what actually prevents concurrent runs.
   const isProcessingRef = useRef(false);
   const addWatchdogRef = useRef<number | null>(null);
   const storingAccountIdsRef = useRef<Set<string>>(new Set());
+  // Accounts we already tried to mint a long-lived token for on this page.
+  const mintAttemptedIdsRef = useRef<Set<string>>(new Set());
   const [persistedAccounts, setPersistedAccounts] = useState<MultiAccountEntry[]>([]);
   const [isManageOpen, setIsManageOpen] = useState(false);
   const [pendingDeletion, setPendingDeletion] = useState<MultiAccountEntry | null>(null);
@@ -190,6 +199,14 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
   const currentAccount = useSelector((state: any) =>
     state.getIn(['accounts', state.getIn(['meta', 'me'])]),
   ) as Account | undefined;
+
+  // On this screen there is exactly one current account: the one the server
+  // session decided. `activeAccountId` is a locally written hint that can
+  // drift from the session, and mixing the two ticked both entries and
+  // blocked switching on both rows. The hint is only leaned on while the
+  // session is not known yet, right after boot.
+  const sessionAccountId: string | null =
+    currentAccount?.id ?? (activeAccountId as string | null) ?? null;
 
   useEffect(() => {
     let isMounted = true;
@@ -232,7 +249,7 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
       });
   }, []);
 
-  // 언마운트 시 add-account 워치독 타이머 정리(언마운트 후 setState 방지).
+  // Clear the add-account watchdog on unmount so it cannot setState after.
   useEffect(() => {
     return () => {
       if (addWatchdogRef.current !== null) {
@@ -243,16 +260,16 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
   }, []);
 
   const activeEntry = useMemo(() => {
-    if (!activeAccountId || !accounts) {
+    if (!sessionAccountId || !accounts) {
     return null;
     }
 
     if (typeof (accounts as any).get === 'function') {
-      return (accounts as any).get(activeAccountId);
+      return (accounts as any).get(sessionAccountId);
     }
 
-    return (accounts as any)[activeAccountId] ?? null;
-  }, [activeAccountId, accounts]);
+    return (accounts as any)[sessionAccountId] ?? null;
+  }, [sessionAccountId, accounts]);
 
   const displayAvatar =
     activeEntry?.get?.('avatar') ??
@@ -276,7 +293,7 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
     if (activeEntry) {
       const entry = activeEntry.toJS ? activeEntry.toJS() : activeEntry;
       return {
-        id: entry.id ?? activeAccountId ?? currentAccount?.id ?? 'active',
+        id: entry.id ?? sessionAccountId ?? 'active',
         acct: entry.acct ?? entry.username ?? '',
         displayName: entry.displayName ?? entry.acct ?? entry.username ?? '',
         avatar: entry.avatar ?? entry.avatar_static ?? displayAvatar,
@@ -295,7 +312,7 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
     }
 
     return null;
-  }, [activeEntry, activeAccountId, currentAccount, displayAvatar]);
+  }, [activeEntry, sessionAccountId, currentAccount, displayAvatar]);
 
   const mergedAccounts = useMemo(() => {
     const map = new Map<string, MultiAccountEntry>();
@@ -325,8 +342,8 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
   const managedAccounts = useMemo(() => {
     return [...mergedAccounts]
       .sort((a, b) => {
-        const aIsActive = a.id === activeAccountId;
-        const bIsActive = b.id === activeAccountId;
+        const aIsActive = a.id === sessionAccountId;
+        const bIsActive = b.id === sessionAccountId;
 
         if (aIsActive && !bIsActive) return -1;
         if (!aIsActive && bIsActive) return 1;
@@ -338,7 +355,7 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
         return 0;
       })
       .slice(0, 10);
-  }, [mergedAccounts, activeAccountId]);
+  }, [mergedAccounts, sessionAccountId]);
 
   const ensureAccountRegistered = useCallback(
     async (accountId: string) => {
@@ -395,9 +412,10 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
       } catch (error) {
         console.error(error);
 
-        // 저장된 토큰이 죽은(만료·폐기·복호화 불가) 계정이면 원시 에러만 띄우지 말고,
-        // 관리 모달을 열어 해당 항목을 제거하도록 유도한다. 로케일 문자열 매칭이 아니라
-        // 구조화된 에러 코드로 판별한다.
+        // When the stored token is dead - expired, revoked, undecryptable -
+        // do not just show the raw error: open the manage modal so the entry
+        // can be removed. Decided by the structured error code, not by
+        // matching translated strings.
         if (error instanceof MultiAccountSwitchError && error.isDeadToken) {
           const deadEntry =
             managedAccounts.find((candidate) => candidate.id === accountId) ??
@@ -426,63 +444,112 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
     [dispatch, ensureAccountRegistered, intl, managedAccounts, mergedAccounts],
   );
 
+  // Is account switching actually in use in this browser?
+  const hasOtherStoredAccounts = useMemo(
+    () =>
+      mergedAccounts.some(
+        (entry) => !!entry.id && entry.id !== currentAccount?.id,
+      ),
+    [mergedAccounts, currentAccount],
+  );
+
+  // Makes the currently signed-in account something we can switch back to
+  // later.
+  //
+  // This used to store the page's session token (`getAccessToken()`) as-is.
+  // But that token is created by `SessionActivation` on the web superapp with
+  // `long_lived`, `purpose` and `multi_account` all unset, and
+  // `MultiAccounts::RefreshService#ensure_refresh_token_valid!` rejects it
+  // with a 422. So clicking that account's row only ever reported that the
+  // stored token had expired or could not be used - the token was not dead,
+  // it was the wrong kind. Only `mintSwitchToken()` produces a token usable
+  // for switching.
+  //
+  // Whether one exists is decided solely by IndexedDB. The redux `accounts`
+  // map always has the session account injected by `hydrateStore`, so having
+  // an entry never meant having a token.
   const ensureAccountStored = useCallback(async () => {
     if (!currentAccount) {
       return;
     }
 
     const accountId = currentAccount.id;
-    const hasStoredAccount = (() => {
-      if (!accounts) return false;
-      if (typeof (accounts as any).has === 'function') {
-        return (accounts as any).has(accountId);
-      }
-      return Boolean((accounts as any)[accountId]);
-    })();
 
-    if (hasStoredAccount || storingAccountIdsRef.current.has(accountId)) {
+    // No reason to hand a ten-year token to someone with a single account.
+    // For them the first token is fetched by `handleAddAccount` just before
+    // the popup. Not setting the `mintAttemptedIdsRef` marker here matters:
+    // stored entries arrive asynchronously, so this has to stay reachable.
+    if (!hasOtherStoredAccounts) {
       return;
     }
+
+    if (
+      storingAccountIdsRef.current.has(accountId) ||
+      mintAttemptedIdsRef.current.has(accountId)
+    ) {
+      return;
+    }
+
+    // Set the markers before the first asynchronous step. Behind the `await`
+    // below, a second invocation (React 18 StrictMode runs effects twice)
+    // clears the same checks and mints twice. The server returns the same
+    // token so nothing breaks, but it is a wasted request.
+    storingAccountIdsRef.current.add(accountId);
+    // Mint at most once per page load. Retrying on every failure only piles
+    // up ten-year tokens nobody uses.
+    mintAttemptedIdsRef.current.add(accountId);
 
     try {
       const existingEncrypted = await loadEncryptedToken(accountId);
       if (existingEncrypted) {
+        storingAccountIdsRef.current.delete(accountId);
         return;
       }
     } catch {
-      // No existing encrypted token found — proceed to store it.
+      // Could not read it; the code below mints a fresh one.
     }
-
-    const token = currentAuthorizationToken();
-
-    if (!token) {
-      console.warn('Unable to capture current account token for multi-account storage.');
-      return;
-    }
-
-    storingAccountIdsRef.current.add(accountId);
-
-    const entry: MultiAccountEntry = {
-      id: currentAccount.id,
-      acct: currentAccount.acct ?? currentAccount.username ?? '',
-      displayName:
-        currentAccount.display_name ?? currentAccount.username ?? '',
-      avatar:
-        currentAccount.avatar ??
-        currentAccount.avatar_static ??
-        '',
-      encryptedTokenRef: '',
-      lastUsedAt: new Date().toISOString(),
-    };
 
     try {
-      await dispatch(registerAccount(entry, token) as unknown as any);
+      const { mintSwitchToken } = await loadMultiAccountsModule();
+      const minted = await mintSwitchToken(accountId);
+
+      if (!minted) {
+        return;
+      }
+
+      const entry: MultiAccountEntry = {
+        id: minted.account.id,
+        acct: firstNonEmpty(
+          minted.account.acct,
+          currentAccount.acct,
+          currentAccount.username,
+        ),
+        displayName: firstNonEmpty(
+          minted.account.display_name,
+          minted.account.username,
+          currentAccount.display_name,
+          currentAccount.username,
+        ),
+        avatar: firstNonEmpty(
+          minted.account.avatar,
+          minted.account.avatar_static,
+          currentAccount.avatar,
+          currentAccount.avatar_static,
+        ),
+        encryptedTokenRef: '',
+        lastUsedAt: new Date().toISOString(),
+      };
+
+      await dispatch(registerAccount(entry, minted.token) as unknown as any);
     } catch (error) {
-      console.error('Failed to register current account for multi-account storage:', error);
+      console.error(
+        'Failed to store a switch token for the current account:',
+        error,
+      );
     } finally {
       storingAccountIdsRef.current.delete(accountId);
     }
-  }, [accounts, currentAccount, dispatch]);
+  }, [currentAccount, dispatch, hasOtherStoredAccounts]);
 
   useEffect(() => {
     void ensureAccountStored();
@@ -545,7 +612,8 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
     };
   }, [isManageOpen, handleCloseManage]);
 
-  // 관리 모달을 열 때마다 저장된 항목을 다시 읽어 표시명·아바타를 최신 상태로 유지한다.
+  // Re-read the stored entries whenever the manage modal opens so display
+  // names and avatars stay current.
   useEffect(() => {
     if (!isManageOpen) {
       return;
@@ -588,7 +656,7 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
           }),
         );
 
-        if (entry.id === activeAccountId) {
+        if (entry.id === sessionAccountId) {
           try {
             await api(false).delete('/auth/sign_out', {
               headers: {
@@ -628,12 +696,13 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
       messages.manageRemoveFailure,
       messages.manageRemoveSuccess,
       messages.manageSignOutFailure,
-      activeAccountId,
+      sessionAccountId,
       deletingAccountId,
     ],
   );
 
-  // add-account 흐름이 끝나면(성공/실패/취소/워치독) UI 플래그와 워치독을 해제.
+  // Release the UI flags and the watchdog when the add-account flow ends,
+  // whether it succeeded, failed, was cancelled, or timed out.
   const finishAddProcessing = useCallback(() => {
     isProcessingRef.current = false;
     if (addWatchdogRef.current !== null) {
@@ -643,7 +712,8 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
     setIsProcessing(false);
   }, []);
 
-  // 사용자가 계정 추가를 수동 취소: 진행 중인 OAuth 팝업을 닫고 UI를 즉시 복구.
+  // The user cancelled adding an account: close the in-flight OAuth popup and
+  // restore the UI at once.
   const handleCancelAddAccount = useCallback(() => {
     void loadCallbackHandlerModule().then(({ cancelPendingOAuthRequests }) => {
       cancelPendingOAuthRequests();
@@ -659,8 +729,9 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
       isProcessingRef.current = true;
       setIsProcessing(true);
 
-      // 안전망: 모든 개별 타임아웃(api 15s · OAuth 팝업 90s)을 넘기는 예기치 못한
-      // hang에도 UI가 영구히 잠기지 않도록 흐름 진입 즉시 워치독을 건다.
+      // Backstop: arm the watchdog as soon as the flow starts so an
+      // unexpected hang past every individual timeout (15s per api call, 90s
+      // for the OAuth popup) cannot lock the UI forever.
       addWatchdogRef.current = window.setTimeout(() => {
         console.warn(
           '[MultiAccount] add-account watchdog fired; force-releasing UI state',
@@ -676,58 +747,54 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
 
       const pending = { state: null as string | null, nonce: null as string | null };
 
-      const currentAccountId = activeAccount?.id ?? currentAccount?.id ?? null;
+      // Whoever the server session belongs to right now is the reference.
+      const currentAccountId = sessionAccountId;
 
       let restoreMultiAccountSessionFn:
         | MultiAccountsModule['restoreMultiAccountSession']
         | undefined;
 
       try {
+        // Refetch and overwrite this account's long-lived token before the
+        // popup opens. This is the only path that repairs a session token
+        // stored by an older version, so it never skips an account that
+        // already has an entry. It is also the last moment a token can be
+        // minted for this account: the popup's `prompt=login` is about to
+        // sign the shared session out.
         if (currentAccountId) {
           try {
-            const response = await api().post<{
-              token?: string;
-              account?: {
-                id?: string;
-                acct?: string;
-                username?: string;
-                display_name?: string;
-                avatar?: string;
-                avatar_static?: string;
-              };
-              scope?: string;
-              expires_at?: string | null;
-            }>('/api/v1/multi_accounts/refresh_token', undefined, {
-              timeout: MULTI_ACCOUNT_REQUEST_TIMEOUT,
-            });
+            const { mintSwitchToken } = await loadMultiAccountsModule();
+            const minted = await mintSwitchToken(currentAccountId);
 
-            const { token, account } = response.data;
-
-            if (token && account) {
+            if (minted) {
               const refreshedEntry: MultiAccountEntry = {
-                id: account.id ?? currentAccountId,
-                acct:
-                  account.acct ??
-                  account.username ??
-                  currentAccount?.acct ??
+                id: minted.account.id,
+                acct: firstNonEmpty(
+                  minted.account.acct,
+                  currentAccount?.acct,
+                  currentAccount?.username,
                   currentAccountId,
-                displayName:
-                  account.display_name ??
-                  account.username ??
-                  currentAccount?.display_name ??
-                  currentAccount?.username ??
-                  '',
-                avatar:
-                  account.avatar ??
-                  account.avatar_static ??
-                  currentAccount?.avatar ??
-                  currentAccount?.avatar_static ??
-                  '',
+                ),
+                displayName: firstNonEmpty(
+                  minted.account.display_name,
+                  minted.account.username,
+                  currentAccount?.display_name,
+                  currentAccount?.username,
+                ),
+                avatar: firstNonEmpty(
+                  minted.account.avatar,
+                  minted.account.avatar_static,
+                  currentAccount?.avatar,
+                  currentAccount?.avatar_static,
+                ),
                 encryptedTokenRef: '',
                 lastUsedAt: new Date().toISOString(),
               };
 
-              await dispatch(registerAccount(refreshedEntry, token) as unknown as any);
+              await dispatch(
+                registerAccount(refreshedEntry, minted.token) as unknown as any,
+              );
+              mintAttemptedIdsRef.current.add(currentAccountId);
             }
           } catch (refreshError) {
             console.error(
@@ -771,8 +838,9 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
           );
         }
 
-        // 새 계정 추가 시에는 반드시 로그인 화면을 강제한다. 그렇지 않으면 OAuth가
-        // 현재 세션 쿠키의 계정을 그대로 재인가해 "이미 로그인된 계정"을 추가하게 된다.
+        // Adding a new account must force the login screen. Otherwise OAuth
+        // simply re-authorises the account in the current session cookie and
+        // adds the one that is already signed in.
         const authorizeEntry = await fetchAuthorizeEntry({ forceLogin: true });
         pending.state = authorizeEntry.state;
         pending.nonce = authorizeEntry.nonce;
@@ -785,8 +853,6 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
           nonce,
           authorization_code: callback.code,
         });
-
-        await ensureAccountStored();
 
         const accountEntry: MultiAccountEntry = {
           id: account.id,
@@ -831,12 +897,11 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
 
     void add();
   }, [
-    activeAccount,
     currentAccount,
     dispatch,
-    ensureAccountStored,
     finishAddProcessing,
     intl,
+    sessionAccountId,
   ]);
 
   const handleLogOutAllAccounts = useCallback(() => {
@@ -916,12 +981,13 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
               </div>
             ) : (
               managedAccounts.map((entry) => {
-                const isActive = entry.id === activeAccountId;
-                // 서버 세션이 현재 이 계정인 경우: 이미 로그인돼 있으므로 전환은 무의미하다.
+                // The server session decides the current account.
+                // `activeAccountId` is a locally written hint that can drift
+                // from it, and when both got ticked, both rows refused to
+                // switch and the user could go nowhere.
                 const isCurrentLoggedIn = entry.id === currentAccount.id;
                 const isDeleting = deletingAccountId === entry.id;
                 const canSwitch = !(
-                  isActive ||
                   isCurrentLoggedIn ||
                   isDeleting ||
                   isProcessing
@@ -944,7 +1010,7 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
                   <div
                     key={entry.id}
                     className={`account-switcher__manage-item${
-                      isActive || isCurrentLoggedIn
+                      isCurrentLoggedIn
                         ? ' account-switcher__manage-item--active'
                         : ''
                     }`}
@@ -969,7 +1035,7 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
                       </span>
                     </div>
                     <div className='account-switcher__manage-actions'>
-                      {(isActive || isCurrentLoggedIn) && (
+                      {isCurrentLoggedIn && (
                         <span className='account-switcher__manage-status' aria-hidden>
                           <Icon id='check' icon={CheckIcon} className='account-switcher__manage-check' />
                         </span>
