@@ -116,6 +116,12 @@
   --color-mention: var(--color-accent);
   --color-ghost-button-text: var(--color-button-text);
   --color-dark: var(--color-brand-longwhile-dark);
+
+  /* Fixed colours used only on mobile (759px and below). The search field is
+     a panel lifted slightly in brightness; the popout must be opaque, because
+     a translucent one lets timeline text show through the hints. */
+  --color-mobile-search-bg: #ffffff08;
+  --color-mobile-popout-bg: #161e2b;
   --color-mud: var(--color-bg-compose-form);
   --color-bg-compose-form: rgba(25, 37, 48, 0.85);
   --color-link: #1d9bf0;
@@ -353,6 +359,8 @@ body.theme-mastodon-bird-ui-light {
   --color-mention: var(--color-accent-dark);
   --color-ghost-button-text: var(--color-accent-dark);
   --color-dark: #f8f8f8;
+  --color-mobile-search-bg: #f2f4f5ba;
+  --color-mobile-popout-bg: #f8f8f8;
   --color-mud: var(--color-bg-compose-form);
   --color-bg-compose-form: #f5f5f5e0;
   --color-link: #0d86d6;
@@ -6358,4 +6366,48 @@ body.layout-single-column
 
 .layout-single-column .search__icon {
   color: var(--color-dim);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile view (759px and below): search field and popout
+   ═══════════════════════════════════════════════════════════════════════════
+
+   This block belongs at the very end of the file. It shares specificity with
+   `.layout-single-column .search` above (a media query does not raise specificity), so it only
+   wins on source order.
+
+   * The search background does not follow the palette; it is pinned to
+     `--color-mobile-search-bg` - #f2f4f5ba light, #ffffff08 dark.
+   * The popout (recent searches, search options) must be opaque. A
+     translucent one lets timeline text show through the hints. Background,
+     border, `backdrop-filter` and `opacity` are all set so it holds
+     whichever layer was see-through.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media screen and (max-width: 759px) {
+  .layout-single-column .search,
+  .layout-single-column .search.active {
+    background-color: var(--color-mobile-search-bg);
+  }
+
+  .layout-single-column .search__popout,
+  .layout-single-column .search-popout,
+  .layout-single-column .explore__search-header .search__popout {
+    background-color: var(--color-mobile-popout-bg);
+    border-color: var(--color-mobile-popout-bg);
+    backdrop-filter: none;
+    opacity: 1;
+  }
+}
+
+/* The search field draws no outline when clicked. `.layout-single-column input:focus-visible`
+   above gives every input an `--color-accent` outline, which on the pill
+   shaped search field squares off outside the rounded background. Only the
+   search field is exempt; other inputs keep theirs, because keyboard users
+   need them. Naming `input` as well raises specificity above that rule
+   (two classes plus one element). */
+.layout-single-column .search .search__input:focus,
+.layout-single-column .search input.search__input:focus-visible,
+.layout-single-column .search:focus-within,
+.layout-single-column .search.active {
+  outline: 0;
 }

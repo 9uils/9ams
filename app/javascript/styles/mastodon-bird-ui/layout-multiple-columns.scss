@@ -5623,3 +5623,47 @@ div[tabindex="-1"] + div[tabindex="-1"] > .status__wrapper > .status-reply.statu
 .layout-multiple-columns .search__icon {
   color: var(--color-dim);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile view (759px and below): search field and popout
+   ═══════════════════════════════════════════════════════════════════════════
+
+   This block belongs at the very end of the file. It shares specificity with
+   `.layout-multiple-columns .search` above (a media query does not raise specificity), so it only
+   wins on source order.
+
+   * The search background does not follow the palette; it is pinned to
+     `--color-mobile-search-bg` - #f2f4f5ba light, #ffffff08 dark.
+   * The popout (recent searches, search options) must be opaque. A
+     translucent one lets timeline text show through the hints. Background,
+     border, `backdrop-filter` and `opacity` are all set so it holds
+     whichever layer was see-through.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media screen and (max-width: 759px) {
+  .layout-multiple-columns .search,
+  .layout-multiple-columns .search.active {
+    background-color: var(--color-mobile-search-bg);
+  }
+
+  .layout-multiple-columns .search__popout,
+  .layout-multiple-columns .search-popout,
+  .layout-multiple-columns .explore__search-header .search__popout {
+    background-color: var(--color-mobile-popout-bg);
+    border-color: var(--color-mobile-popout-bg);
+    backdrop-filter: none;
+    opacity: 1;
+  }
+}
+
+/* The search field draws no outline when clicked. `.layout-multiple-columns input:focus-visible`
+   above gives every input an `--color-accent` outline, which on the pill
+   shaped search field squares off outside the rounded background. Only the
+   search field is exempt; other inputs keep theirs, because keyboard users
+   need them. Naming `input` as well raises specificity above that rule
+   (two classes plus one element). */
+.layout-multiple-columns .search .search__input:focus,
+.layout-multiple-columns .search input.search__input:focus-visible,
+.layout-multiple-columns .search:focus-within,
+.layout-multiple-columns .search.active {
+  outline: 0;
+}

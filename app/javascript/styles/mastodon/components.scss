@@ -3218,12 +3218,17 @@ body .ui__navigation-bar__item:not(.ui__navigation-bar__item--menu) {
   }
 }
 
+// Height of the mobile bottom bar. The drawer (navigation-panel__wrapper)
+// extends underneath it, so it needs that much bottom padding for the last
+// entries to be reachable.
+$ui-navigation-bar-height: 54px;
+
 .ui__navigation-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  height: 54px;
+  height: $ui-navigation-bar-height;
   background: var(--background-color);
   border-top: 1px solid var(--background-border-color);
   display: flex;
@@ -3963,6 +3968,21 @@ body .ui__navigation-bar__item:not(.ui__navigation-bar__item--menu) {
 }
 
 @media screen and (max-width: $mobile-breakpoint) {
+  // The mobile right-hand menu scrolls as one wrapper.
+  //
+  // There used to be nowhere for the scroll to live. The wrapper declared no
+  // vertical overflow, the inner `.navigation-panel` was pinned to the
+  // viewport with `height: calc(100% - 20px)`, and its
+  // `.navigation-panel__menu` shrank under `flex: 1 1 auto; min-height: 0`
+  // and then spilled its content (the `overflow: visible` block below
+  // overrides the `overflow-y: auto` above). Once there were more entries
+  // than fit, the bottom ones - settings, account switch, log out - could not
+  // be reached.
+  //
+  // Pin the scroll container to the wrapper alone and let the inner panel
+  // grow with its content. The wrapper must be `display: block`: as a flex
+  // container, `align-items: stretch` would tie the panel back to the
+  // viewport height.
   .navigation-panel__wrapper {
     position: fixed;
     inset-block: 0;
@@ -3970,10 +3990,48 @@ body .ui__navigation-bar__item:not(.ui__navigation-bar__item--menu) {
     inset-inline-end: 0;
     max-width: 100vw;
     overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     transform: translateX(100%);
     transition: transform 0.3s ease;
     z-index: 35;
-    display: flex;
+    display: block;
+  }
+
+  .navigation-panel__wrapper > .navigation-panel {
+    height: auto;
+    min-height: 100%;
+    max-height: none;
+    margin-top: 0;
+    margin-bottom: 0;
+    box-sizing: border-box;
+
+    // The bottom bar floats above the drawer. `.ui__navigation-bar` is
+    // `position: fixed; bottom: 0; z-index: 40` while the drawer sits at 35,
+    // so the drawer's bottom 54px is always covered. Scrolling to the very
+    // end still left the last entries - settings, account switch - under the
+    // bar and untappable. Pad by the bar height instead: the background still
+    // reaches the bottom and only the content rises above the bar. This
+    // clears the iOS home indicator too.
+    padding-bottom: calc(
+      #{$ui-navigation-bar-height} + 16px + env(safe-area-inset-bottom, 0px)
+    );
+  }
+
+  // The 24px below the search field comes from the theme's
+  // `.layout-single-column .search`. It only needs to go inside the drawer,
+  // so rather than editing every theme file, override it here with a
+  // three-class selector. That way it behaves the same under any theme.
+  .navigation-panel__wrapper > .navigation-panel .search {
+    margin-bottom: 0;
+  }
+
+  // The menu has to grow with its content for the drawer to have anything to
+  // scroll. If it shrinks, the list is clipped again.
+  .navigation-panel__wrapper > .navigation-panel > .navigation-panel__menu {
+    flex: 0 0 auto;
+    min-height: 0;
   }
 
   .navigation-panel__wrapper--open {
@@ -13271,6 +13329,38 @@ div.compose-panel .account__bio {
     color: inherit;
   }
 
+  // Mentions and hashtags follow the bubble's text colour too - inside DM
+  // only. Elsewhere they keep the accent colour.
+  //
+  // `&--mine &__bubble a { color: inherit }` above is not enough. That is two
+  // classes plus an element, and the theme files declare rules at the same
+  // place and load afterwards, so matching specificity loses on source order.
+  // The links alone were left on `--color-mention` / `--color-hashtag`.
+  //
+  // The mention specificity is easy to miscount.
+  // `.layout-single-column .status-link.mention:not(.hashtag)` is four
+  // classes, not three: `:not()` counts the `.hashtag` inside the
+  // parentheses. Writing `& &__bubble .status-link.mention` (also four) tied
+  // and lost, so mentions stayed in the accent colour. The theme's hashtag
+  // rule (`.status-link.hashtag`) really is three, so that one landed - which
+  // is why only one of the two ever took effect. Matching the theme's
+  // `:not(.hashtag)` brings mentions to five and wins it back. (Mastodon puts
+  // both `mention` and `hashtag` on hashtag links, so what this `:not()`
+  // skips is picked up by the hashtag selector below.)
+  //
+  // Do not hard-code `--color-sent-message-text`. Received bubbles use
+  // `--color-recieve-message-text`, and in the light theme the sent text
+  // colour is white, which would leave white text on a pale grey received
+  // bubble. `inherit` picks up whatever each bubble uses.
+  & &__bubble .status-link.mention:not(.hashtag),
+  & &__bubble .status-link.hashtag {
+    color: inherit;
+  }
+
+  // Timestamp and read receipt, stacked beside the bubble and aligned to its
+  // bottom. `.dm-message` is a flex row and the sent side is `row-reverse`,
+  // so this block always faces inwards on its own - no per-direction rules
+  // needed.
   &__meta {
     flex: 0 0 auto;
     display: flex;
