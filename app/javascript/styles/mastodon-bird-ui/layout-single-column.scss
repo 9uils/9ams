@@ -120,7 +120,7 @@
   /* Fixed colours used only on mobile (759px and below). The search field is
      a panel lifted slightly in brightness; the popout must be opaque, because
      a translucent one lets timeline text show through the hints. */
-  --color-mobile-search-bg: #ffffff08;
+  --color-mobile-search-bg: #222a32;
   --color-mobile-popout-bg: #161e2b;
   --color-mud: var(--color-bg-compose-form);
   --color-bg-compose-form: rgba(25, 37, 48, 0.85);

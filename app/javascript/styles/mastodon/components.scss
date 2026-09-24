@@ -3999,21 +3999,31 @@ $ui-navigation-bar-height: 54px;
     display: block;
   }
 
-  .navigation-panel__wrapper > .navigation-panel {
+  // The bottom bar floats above the drawer. `.ui__navigation-bar` is
+  // `position: fixed; bottom: 0; z-index: 40` while the drawer sits at 35, so
+  // the drawer's bottom 54px is always covered. Scrolling to the very end
+  // still left the last entries - settings, account switch - under the bar and
+  // untappable. Pad by the bar height instead: the background still reaches
+  // the bottom and only the content rises above the bar. This clears the iOS
+  // home indicator too.
+  //   Naming `__container` as well - three classes - is what makes it stick.
+  //   Every theme file declares `.layout-* .navigation-panel { padding: 10px }`
+  //   with two classes and loads after this file, so writing
+  //   `.navigation-panel__wrapper > .navigation-panel` (also two) ties and
+  //   loses, and that shorthand `padding` silently reset the bottom padding to
+  //   10px. Tall screens had enough slack to hide it; on a short one such as
+  //   400x600 the account switch stayed pinned under the bar no matter how far
+  //   the drawer was scrolled.
+  //   The `.search` and `__menu` rules below already carry three classes and
+  //   win as they are. Check any new drawer rule against the theme's
+  //   two-class ones.
+  .navigation-panel__container .navigation-panel__wrapper > .navigation-panel {
     height: auto;
     min-height: 100%;
     max-height: none;
     margin-top: 0;
     margin-bottom: 0;
     box-sizing: border-box;
-
-    // The bottom bar floats above the drawer. `.ui__navigation-bar` is
-    // `position: fixed; bottom: 0; z-index: 40` while the drawer sits at 35,
-    // so the drawer's bottom 54px is always covered. Scrolling to the very
-    // end still left the last entries - settings, account switch - under the
-    // bar and untappable. Pad by the bar height instead: the background still
-    // reaches the bottom and only the content rises above the bar. This
-    // clears the iOS home indicator too.
     padding-bottom: calc(
       #{$ui-navigation-bar-height} + 16px + env(safe-area-inset-bottom, 0px)
     );
@@ -4025,6 +4035,12 @@ $ui-navigation-bar-height: 54px;
   // three-class selector. That way it behaves the same under any theme.
   .navigation-panel__wrapper > .navigation-panel .search {
     margin-bottom: 0;
+
+    // Inside the drawer only, inset the far edge by another 10px (8px -> 18px).
+    // Written as a logical property so it does not depend on writing
+    // direction: the `margin: 16px 8px 12px` shorthand above sets left and
+    // right physically, and in RTL this side has to become the left one.
+    margin-inline-end: 18px;
   }
 
   // The menu has to grow with its content for the drawer to have anything to
@@ -4042,8 +4058,11 @@ $ui-navigation-bar-height: 54px;
     gap: 10px;
   }
 
+  // Sit the profile row right under the search field. Dropping the bottom
+  // margin lifts the menu by that much, which fits one more entry on a short
+  // screen.
   .navigation-panel__profile {
-    margin: 0 0 16px;
+    margin: 5px 0 0;
   }
 
   .navigation-panel__profile-avatar .account__avatar {
