@@ -12179,13 +12179,13 @@ div.compose-panel .account__bio {
     }
 
     &--link {
-      color: var(--color-brand-longwhile, #{$account-switcher-add-text-color});
+      color: var(--color-brand-longwhile-links, #{$account-switcher-add-text-color});
       background: rgba($darker-text-color, 0.05);
 
       &:hover:not(:disabled),
       &:focus-visible:not(:disabled) {
         color: color-mix(in srgb,
-            var(--color-brand-longwhile, #{$account-switcher-add-text-color}) 85%,
+            var(--color-brand-longwhile-links, #{$account-switcher-add-text-color}) 85%,
             #000000 15%);
         background: rgba($darker-text-color, 0.08);
       }
