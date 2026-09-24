@@ -23,7 +23,7 @@ import { Icon } from 'mastodon/components/icon';
 import { CircularProgress } from 'mastodon/components/circular_progress';
 import { showAlert } from 'mastodon/actions/alerts';
 import type { Account } from 'mastodon/models/account';
-import api from 'mastodon/api';
+import api, { suspendSessionRecovery } from 'mastodon/api';
 import { MULTI_ACCOUNT_REQUEST_TIMEOUT } from 'mastodon/api/multi_accounts_constants';
 import {
   registerAccount,
@@ -55,6 +55,19 @@ const loadMultiAccountsModule = (): Promise<MultiAccountsModule> =>
 
 const loadCallbackHandlerModule = (): Promise<CallbackHandlerModule> =>
   import('mastodon/features/multi_account/callback_handler');
+
+// The popup's forced login revokes this page's token. Check whether it still
+// works once the flow has failed.
+const pageTokenWasRevoked = async (): Promise<boolean> => {
+  try {
+    await api().get('/api/v1/accounts/verify_credentials', {
+      timeout: MULTI_ACCOUNT_REQUEST_TIMEOUT,
+    });
+    return false;
+  } catch (error) {
+    return (error as { response?: { status?: number } }).response?.status === 401;
+  }
+};
 
 const messages = defineMessages({
   switchAccount: { id: 'account_switcher.switch_account', defaultMessage: 'Switch account' },
@@ -754,6 +767,11 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
         | MultiAccountsModule['restoreMultiAccountSession']
         | undefined;
 
+      // Once the popup opens this page's token may die at any time. Paths that
+      // end in a reload keep recovery suspended.
+      let releaseSessionRecovery: (() => void) | null = null;
+      let reloading = false;
+
       try {
         // Refetch and overwrite this account's long-lived token before the
         // popup opens. This is the only path that repairs a session token
@@ -823,6 +841,8 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
         const left = window.screenX + (window.outerWidth - width) / 2;
         const top = window.screenY + (window.outerHeight - height) / 2;
 
+        releaseSessionRecovery = suspendSessionRecovery();
+
         const blankPopup = window.open(
           'about:blank',
           'multi-account-oauth',
@@ -866,7 +886,9 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
         await dispatch(
           registerAccount(accountEntry, token) as unknown as any,
         );
+        // On success `switchAccount` reloads the page.
         await dispatch(switchAccount(accountEntry.id) as unknown as any);
+        reloading = true;
       } catch (error) {
         console.error('Account registration failed:', error);
 
@@ -881,6 +903,14 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
           }
         }
 
+        // If the popup already signed the session out, every request from this
+        // page now fails. Reload so the page matches the current session.
+        if (releaseSessionRecovery && (await pageTokenWasRevoked())) {
+          reloading = true;
+          window.location.reload();
+          return;
+        }
+
         const knownMessage =
           error instanceof Error ? knownErrorMessages[error.message] : undefined;
         const message =
@@ -891,6 +921,9 @@ export const AccountSwitcher: FC<AccountSwitcherProps> = ({ renderTrigger }) => 
 
         dispatch(showAlert({ message }));
       } finally {
+        if (!reloading) {
+          releaseSessionRecovery?.();
+        }
         finishAddProcessing();
       }
     };

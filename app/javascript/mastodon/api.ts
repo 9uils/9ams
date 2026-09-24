@@ -132,7 +132,27 @@ const requestUsedSessionToken = (config: AxiosError['config']): boolean => {
   );
 };
 
+// The add-account popup's `prompt=login` signs out the shared session, which
+// also revokes this page's session token. Any 401 while the popup is open is
+// expected, so recovery is paused until the flow ends; `handleAddAccount`
+// reloads afterwards to pick up the new session.
+let sessionRecoverySuspensions = 0;
+
+export const suspendSessionRecovery = (): (() => void) => {
+  sessionRecoverySuspensions += 1;
+
+  let released = false;
+
+  return () => {
+    if (released) return;
+
+    released = true;
+    sessionRecoverySuspensions -= 1;
+  };
+};
+
 const recoverFromInvalidSession = () => {
+  if (sessionRecoverySuspensions > 0) return;
   if (sessionRecoveryInProgress) return;
   sessionRecoveryInProgress = true;
 
