@@ -4036,11 +4036,29 @@ $ui-navigation-bar-height: 54px;
   .navigation-panel__wrapper > .navigation-panel .search {
     margin-bottom: 0;
 
-    // Inside the drawer only, inset the far edge by another 10px (8px -> 18px).
-    // Written as a logical property so it does not depend on writing
-    // direction: the `margin: 16px 8px 12px` shorthand above sets left and
-    // right physically, and in RTL this side has to become the left one.
-    margin-inline-end: 18px;
+    // Width is narrowed with `width`, not with margin. `.search` carries
+    // `width: 100%` from the `search-input` mixin, so no amount of horizontal
+    // margin shrinks the box - it just pushes it and the overflow is clipped
+    // by the drawer's `overflow-x: hidden`. That is why the search field
+    // always looked like it ran to the right edge, and why a margin alone
+    // changed nothing on screen. `width: auto` hands the sizing back to the
+    // margins.
+    width: auto;
+
+    // The near edge keeps the 8px from the `margin: 16px 8px 12px` above;
+    // only the far edge gets 10px. Written as a logical property because that
+    // shorthand sets left and right physically, and in RTL this side has to
+    // become the left one.
+    margin-inline-end: 10px;
+
+    // The mobile search colour also lives in the theme files, but those only
+    // reach the bird-ui bundles. Repeat it here so the default and light
+    // themes match. A theme without the token falls back to what it used
+    // before.
+    background-color: var(
+      --color-mobile-search-bg,
+      var(--input-background-color)
+    );
   }
 
   // The menu has to grow with its content for the drawer to have anything to
