@@ -681,7 +681,7 @@ ko:
       created_at: 신고 시각
       delete_and_resolve: 게시물 삭제
       forwarded: 전달됨
-      forwarded_replies_explanation: 이 신고는 리모트 사용자가 리모트 컨텐츠에 대해 신고한 것입니다. 이것은 신고된 내용이 로컬 사용자에 대한 답글이기 때문에 첨부되었습니다.
+      forwarded_replies_explanation: 이 신고는 리모트 사용자가 리모트 콘텐츠에 대해 신고한 것입니다. 이것은 신고된 내용이 로컬 사용자에 대한 답글이기 때문에 첨부되었습니다.
       forwarded_to: "%{domain}에게 전달됨"
       mark_as_resolved: 해결로 표시
       mark_as_sensitive: 민감함으로 설정
@@ -724,7 +724,7 @@ ko:
         close_reports_html: "<strong>@%{acct}</strong>에 대한 <strong>모든</strong> 신고를 해결됨으로 처리합니다"
         delete_data_html: "<strong>@%{acct}</strong>의 프로필과 콘텐츠를 30일의 유예기간 이후에 삭제합니다"
         preview_preamble_html: "<strong>@%{acct}</strong>는 다음 내용의 경고를 받게 됩니다:"
-        record_strike_html: 향후 규칙위반에 대한 참고 사항이 될 수 있도록 <strong>@%{acct}</strong>에 대한 처벌기록을 남깁니다
+        record_strike_html: 향후 규칙위반에 대한 참고 사항이 될 수 있도록 <strong>@%{acct}</strong>에 대한 처벌 기록을 남깁니다
         send_email_html: "<strong>@%{acct}</strong>에게 경고 메일을 보냅니다"
         warning_placeholder: 중재 결정에 대한 추가적인 이유.
       target_origin: 신고된 계정의 소속
@@ -762,9 +762,9 @@ ko:
         invite_users: 사용자 초대
         invite_users_description: 사용자가 다른 사람들을 서버에 초대할 수 있도록 허용
         manage_announcements: 공지 관리
-        manage_announcements_description: 사용자가 서버의 공지사항을 관리할 수 있도록 허용
+        manage_announcements_description: 사용자가 서버의 공지 사항을 관리할 수 있도록 허용
         manage_appeals: 이의제기 관리
-        manage_appeals_description: 사용자가 중재에 대한 이의제기를 리뷰할 수 있도록 허용
+        manage_appeals_description: 사용자가 중재에 대한 이의 제기를 리뷰할 수 있도록 허용
         manage_blocks: 차단 관리
         manage_blocks_description: 사용자가 이메일 제공자와 IP 주소를 차단할 수 있도록 허용
         manage_custom_emojis: 커스텀 에모지 관리
@@ -772,7 +772,7 @@ ko:
         manage_federation: 연합 관리
         manage_federation_description: 사용자가 다른 도메인과의 연합을 차단하거나 허용할 수 있도록 하고, 전달 가능 여부를 조정할 수 있도록 허용
         manage_invites: 초대 관리
-        manage_invites_description: 사용자가 초대 링크를 보고 비활성화 할 수 있도록 허용
+        manage_invites_description: 사용자가 초대 링크를 보고 비활성화할 수 있도록 허용
         manage_reports: 신고 관리
         manage_reports_description: 사용자가 신고를 리뷰하고 해당 사용자에 대한 중재활동을 수행할 수 있도록 허용
         manage_roles: 역할 관리
@@ -786,20 +786,20 @@ ko:
         manage_user_access: 사용자 접근 관리
         manage_user_access_description: 사용자가 다른 사용자의 2차 인증을 비활성화 하거나, 이메일 주소를 바꾸거나, 암호를 초기화 할 수 있도록 허용
         manage_users: 사용자 관리
-        manage_users_description: 사용자가 다른 사용자의 상세정보를 보고 해당 사용자에 대한 중재활동을 할 수 있도록 허용
+        manage_users_description: 사용자가 다른 사용자의 상세 정보를 보고 해당 사용자에 대한 중재 활동을 할 수 있도록 허용
         manage_webhooks: 웹훅 관리
         manage_webhooks_description: 사용자가 관리용 웹훅을 설정할 수 있도록 허용
         view_audit_log: 감사 기록 보기
         view_audit_log_description: 사용자가 서버의 감사 기록을 볼 수 있도록 허용
         view_dashboard: 대시보드 보기
-        view_dashboard_description: 사용자가 여러 통계정보를 볼 수 있는 대시보드에 접근할 수 있도록 허용
+        view_dashboard_description: 사용자가 여러 통계 정보를 볼 수 있는 대시보드에 접근할 수 있도록 허용
         view_devops: 데브옵스
         view_devops_description: Sidekiq과 pgHero 대시보드에 접근할 수 있도록 허용
       title: 역할
     rules:
       add_new: 규칙 추가
       delete: 삭제
-      description_html: 대부분의 사람들은 서비스 약관을 읽고 동의한다고 밝힙니다만, 대개 문제가 발생하기 전까지는 약관을 자세히 읽어보지 않습니다. <strong>서버의 운영원칙을 단일한 글머리 기호 목록으로 제공하여 한 눈에 쉽게 확인할 수 있도록 하세요.</strong> 각 규칙을 짧고 간결하게 유지하되, 많은 항목으로 나누지 않도록 하세요.
+      description_html: 대부분의 사람들은 서비스 약관을 읽고 동의한다고 밝힙니다만, 대개 문제가 발생하기 전까지는 약관을 자세히 읽어보지 않습니다. <strong>서버의 운영 원칙을 단일한 글머리 기호 목록으로 제공하여 한눈에 쉽게 확인할 수 있도록 하세요.</strong> 각 규칙을 짧고 간결하게 유지하되, 많은 항목으로 나누지 않도록 하세요.
       edit: 규칙 수정
       empty: 아직 정의된 서버 규칙이 없습니다.
       title: 서버 규칙
@@ -823,7 +823,7 @@ ko:
         preamble: 마스토돈에 저장된 사용자 콘텐츠를 어떻게 다룰지 제어합니다.
         title: 콘텐츠 보존기한
       default_noindex:
-        desc_html: 이 설정을 개인적으로 바꾸지 않은 모든 사용자들에게 적용 됩니다
+        desc_html: 이 설정을 개인적으로 바꾸지 않은 모든 사용자들에게 적용됩니다
         title: 사용자들이 기본적으로 검색엔진에 인덱싱되지 않도록 합니다
       discovery:
         follow_recommendations: 팔로우 추천
@@ -845,8 +845,8 @@ ko:
       registrations_mode:
         modes:
           approved: 가입하려면 승인이 필요함
-          none: 아무도 가입 할 수 없음
-          open: 누구나 가입 할 수 있음
+          none: 아무도 가입할 수 없음
+          open: 누구나 가입할 수 있음
         warning_hint: 당신의 중재 팀이 스팸이나 악의적인 가입을 시기적절하게 처리할 수 있다고 자신할 수 없다면 "가입이 승인을 요구하도록" 설정하는 것을 추천합니다.
       security:
         authorized_fetch: 연합된 서버들에게서 인증 필수
