@@ -2,6 +2,10 @@
 
 module MultiAccounts
   class RefreshService
+    # Marks a session token handed out by a switch. It must stay distinct from
+    # a refresh token ('multi_account_refresh').
+    SESSION_TOKEN_PURPOSE = 'multi_account_session'
+
     Result = Struct.new(:access_token, :account, :user, keyword_init: true)
 
     class Error < StandardError
@@ -41,7 +45,8 @@ module MultiAccounts
         raise Error.new('Account not found', status: 404) unless account
         raise Error.new('User not found', status: 404) unless user
 
-        # 정지·비활성 계정이 다중 계정 토큰으로 웹 세션을 획득하는 것을 차단한다.
+        # Stop a suspended or disabled account from obtaining a web session
+        # through a multi-account token.
         raise Error.new('Account is suspended or disabled', status: 403) if user.disabled? || account.suspended?
 
         limiter = nil
@@ -112,25 +117,34 @@ module MultiAccounts
       raise Error.new('Invalid refresh token', status: 401) unless token
       raise Error.new('Refresh token has been revoked', status: 401) if token.revoked?
 
-      # 구버전에서 생성된 토큰이 long_lived/purpose 플래그 없이 존재할 수 있다.
-      # multi_account 플래그가 있거나, multi_account 앱에서 생성된 토큰이면 자동 업그레이드한다.
-      unless token.long_lived_refresh?
-        ma_client_id = Rails.configuration.x.multi_account[:client_id].presence
-        is_multi_account_token = token.try(:multi_account) ||
-                                 (ma_client_id && token.application_id.present? &&
-                                  token.application_id == Doorkeeper::Application.find_by(uid: ma_client_id)&.id)
+      return if token.long_lived_refresh?
 
-        if is_multi_account_token
-          Rails.logger.info("[MultiAccount] Auto-upgrading token #{token.id} to long_lived_refresh (multi_account=#{token.try(:multi_account)}, app_id=#{token.application_id})")
-          updates = {}
-          updates[:long_lived] = true if token.respond_to?(:long_lived=)
-          updates[:purpose] = 'multi_account_refresh' if token.respond_to?(:purpose=)
-          updates[:multi_account] = true if token.respond_to?(:multi_account=) && !token.try(:multi_account)
-          token.update!(updates) if updates.present?
-        else
-          raise Error.new('Token is not a valid multi-account refresh token', status: 422)
-        end
-      end
+      # A session token handed out by a switch can never be replayed as a
+      # refresh token. `create_session_token` creates it on the multi-account
+      # application with `multi_account: true`, so without this marker the
+      # auto-upgrade below would promote it to a ten-year refresh token.
+      # `revoke_access!` skips those via `excluding_long_lived_refresh`, so
+      # once promoted it survives logout forever - and one is created on every
+      # single switch.
+      raise Error.new('Token is not a valid multi-account refresh token', status: 422) if token.try(:purpose) == SESSION_TOKEN_PURPOSE
+
+      # Tokens minted by older versions can exist without the long_lived and
+      # purpose flags.
+      #
+      # The only thing that decides is the issuing application. This used to
+      # promote any token carrying `multi_account`, but that column shipped
+      # with this feature and is therefore absent from the very tokens it was
+      # meant to rescue. It bought nothing, and it promoted `multi_account`
+      # tokens issued by other applications, which silently broke the
+      # "not long-lived -> 422" example in
+      # spec/services/multi_accounts/refresh_service_spec.rb.
+      ma_client_id = Rails.configuration.x.multi_account[:client_id].presence
+      ma_application_id = ma_client_id && Doorkeeper::Application.find_by(uid: ma_client_id)&.id
+
+      raise Error.new('Token is not a valid multi-account refresh token', status: 422) unless ma_application_id && token.application_id == ma_application_id
+
+      Rails.logger.info("[MultiAccount] Auto-upgrading token #{token.id} to long_lived_refresh (app_id=#{token.application_id})")
+      token.update!(long_lived: true, purpose: 'multi_account_refresh', multi_account: true)
     end
 
     def find_resource_owner(token)
@@ -153,12 +167,16 @@ module MultiAccounts
       end
     end
 
+    # The session token the page carries right after a switch. `purpose` marks
+    # it apart from a refresh token; `ensure_refresh_token_valid!` reads that
+    # marker and turns it away.
     def create_session_token(refresh_token)
       Doorkeeper::AccessToken.create!(
         application: refresh_token.application,
         resource_owner_id: refresh_token.resource_owner_id,
         scopes: refresh_token.scopes.to_s,
-        multi_account: true
+        multi_account: true,
+        purpose: SESSION_TOKEN_PURPOSE
       )
     end
   end

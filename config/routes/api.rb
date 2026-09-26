@@ -390,10 +390,6 @@ namespace :api, format: false do
 
       resources :accounts, only: [:index], module: :notifications
     end
-
-    resource :multi_accounts, only: [] do
-      post :consume
-    end
   end
 
   namespace :web do

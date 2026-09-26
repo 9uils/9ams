@@ -1,8 +1,9 @@
 import api from 'mastodon/api';
 
-// 타임아웃 상수는 의존성 없는 별도 모듈에서 가져와 re-export 한다. 이 모듈은
-// 동적 import 전용(lazy chunk)이므로, 상수를 정적 import 하는 쪽이 이 모듈을
-// 직접 정적 import 하면 코드 분할이 깨진다. 정적 import 는 constants 파일을 쓸 것.
+// The timeout constant lives in a separate dependency-free module and is
+// re-exported here. This module is dynamic-import only (a lazy chunk), so a
+// caller that statically imports it just to reach the constant would break
+// code splitting. Static importers must use the constants file.
 export { MULTI_ACCOUNT_REQUEST_TIMEOUT } from './multi_accounts_constants';
 import { MULTI_ACCOUNT_REQUEST_TIMEOUT } from './multi_accounts_constants';
 
@@ -57,7 +58,8 @@ export const consumeAuthorizationCode = async (
   try {
     const url = '/api/v1/multi_accounts/consume';
     
-    // consume 엔드포인트는 state/nonce로 검증하므로 Authorization 헤더 없이 호출한다.
+    // The consume endpoint verifies by state/nonce, so it is called without
+    // an Authorization header.
     const response = await api(false).post<ConsumeResponse>(
       url,
       { payload },
@@ -121,6 +123,50 @@ export interface RefreshSessionResponse {
   scope: string;
   expires_at: string | null;
 }
+
+// `/api/v1/multi_accounts/refresh_token` and `session/refresh` return the
+// same shape.
+export type MintedSwitchToken = RefreshSessionResponse;
+
+// Mints a fresh long-lived token that can be used for account switching.
+//
+// The page's session token (`meta.access_token`) is created by
+// `SessionActivation` on the web superapp with `long_lived`, `purpose` and
+// `multi_account` all unset. `ensure_refresh_token_valid!` rejects those with
+// a 422, so storing one means every later switch to that account reports
+// "the stored token has expired or cannot be used" - the token is not dead,
+// it is the wrong kind. This endpoint is the only place that mints a token
+// usable for switching.
+//
+// The server issues the token to whoever owns the bearer currently installed.
+// If that is not `expectedAccountId` the token belongs to someone else, so we
+// return null - writing it down would sign the user into another account
+// every time they click that entry. HTTP errors are thrown.
+export const mintSwitchToken = async (
+  expectedAccountId: string,
+): Promise<MintedSwitchToken | null> => {
+  const response = await api().post<MintedSwitchToken>(
+    '/api/v1/multi_accounts/refresh_token',
+    undefined,
+    { timeout: MULTI_ACCOUNT_REQUEST_TIMEOUT },
+  );
+
+  const { token, account } = response.data;
+
+  if (!token || !account.id) {
+    console.error('[MultiAccount] refresh_token returned no usable token.');
+    return null;
+  }
+
+  if (account.id !== expectedAccountId) {
+    console.error(
+      `[MultiAccount] refresh_token returned a token for ${account.id}, expected ${expectedAccountId}; discarding it.`,
+    );
+    return null;
+  }
+
+  return response.data;
+};
 
 export const refreshSession = async (refreshToken: string) => {
   return api(false).post<RefreshSessionResponse>(

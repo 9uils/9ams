@@ -5,6 +5,11 @@ class Auth::SessionsController < Devise::SessionsController
 
   MAX_2FA_ATTEMPTS_PER_HOUR = 10
 
+  # How long the "come back here after signing in" marker left by the
+  # add-account popup stays valid. That flow normally takes a minute or two,
+  # so anything older is debris from an abandoned attempt.
+  MULTI_ACCOUNT_RETURN_TO_TTL = 10.minutes
+
   layout 'auth'
 
   skip_before_action :check_self_destruct!
@@ -77,8 +82,16 @@ class Auth::SessionsController < Devise::SessionsController
   end
 
   def after_sign_in_path_for(resource)
-    multi_account_return_to = session.delete(:multi_account_return_to)
-    last_url = multi_account_return_to.presence || stored_location_for(:user)
+    # `stored_location_for` deletes from the session the moment it is read.
+    # This used to say `multi_account_return_to.presence ||
+    # stored_location_for(:user)`, which short-circuits: whenever the
+    # multi-account marker was set, `user_return_to` was neither read nor
+    # cleared. It stayed in the session and steered the sign-in after next to
+    # the wrong place. Take both out unconditionally, then choose.
+    multi_account_return_to = consume_multi_account_return_to
+    stored_url = stored_location_for(:user)
+
+    last_url = multi_account_return_to || sanitized_return_path(stored_url)
 
     if home_paths(resource).include?(last_url)
       root_path
@@ -96,6 +109,74 @@ class Auth::SessionsController < Devise::SessionsController
   end
 
   private
+
+  # If the add-account popup is in flight, its authorize URL really is where
+  # the sign-in should return. It only has to not be debris.
+  def consume_multi_account_return_to
+    url = session.delete(:multi_account_return_to)
+    marked_at = session.delete(:multi_account_return_to_at)
+
+    return if url.blank?
+    # No timestamp means the marker predates this code. Do not trust it.
+    return if marked_at.blank?
+    return if Time.now.utc.to_i - marked_at.to_i > MULTI_ACCOUNT_RETURN_TO_TTL.to_i
+
+    # We wrote this value ourselves, but it came back out of the session as a
+    # plain string, so check its shape.
+    uri = parse_return_path(url)
+    return unless uri&.path == '/oauth/authorize'
+    return if uri.query_values.to_h['client_id'].blank?
+
+    url
+  end
+
+  # Filters out the paths that must never be used as a post-sign-in
+  # destination.
+  #
+  #   * `/oauth/authorize` with no parameters. Doorkeeper answers "missing
+  #     required parameter: client_id". The consent form POST used to leave
+  #     this behind; `Oauth::AuthorizationsController` no longer writes it,
+  #     but an old value may still be sitting in someone's session.
+  #   * `/multi_accounts/*`. Popup-only screens. Opened in a normal tab,
+  #     `window.close()` is blocked and the page sits forever on "this window
+  #     will close automatically".
+  #   * `/oauth/authorize` for the multi-account client. This is the important
+  #     one. When the popup arrives with `prompt=login`,
+  #     `store_current_location` writes that URL into `user_return_to` as
+  #     well. If the flow were still alive the `multi_account_return_to`
+  #     marker above would already have won, so reaching this point means the
+  #     flow was abandoned. Following it drags the user to an OAuth consent
+  #     screen instead of home, and approving opens
+  #     `/multi_accounts/callback` in a normal tab, where it stays forever.
+  #
+  # Every other `/oauth/authorize` passes through - third-party app sign-in
+  # depends on it.
+  def sanitized_return_path(path)
+    uri = parse_return_path(path)
+    return if uri.nil?
+
+    return if uri.path.start_with?('/multi_accounts')
+
+    if uri.path == '/oauth/authorize'
+      client_id = uri.query_values.to_h['client_id']
+
+      return if client_id.blank?
+      return if client_id == Rails.configuration.x.multi_account[:client_id]
+    end
+
+    path
+  end
+
+  def parse_return_path(path)
+    return if path.blank?
+
+    uri = Addressable::URI.parse(path)
+    return if uri.nil? || uri.path.blank?
+
+    uri
+  rescue Addressable::URI::InvalidURIError
+    nil
+  end
 
   def check_suspicious!
     user = find_user

@@ -412,4 +412,102 @@ RSpec.describe Auth::SessionsController do
       end
     end
   end
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Where a sign-in lands.
+  #
+  # The add-account popup deliberately signs the shared session out at
+  # `/oauth/authorize?...&prompt=login` (see `Oauth::AuthorizationsController`)
+  # and leaves that URL behind as the place to return to. Closing the popup
+  # there leaves only the debris in the session, and the next sign-in was
+  # dragged to an OAuth screen instead of home.
+  # ═══════════════════════════════════════════════════════════════════════════
+  describe 'POST #create and the stored return location' do
+    subject { post :create, params: { user: { email: user.email, password: user.password } } }
+
+    let(:user) { Fabricate(:user, email: 'return-to@example.com', password: 'abcdefgh') }
+
+    around do |example|
+      original = Rails.configuration.x.multi_account.dup
+      example.run
+      Rails.configuration.x.multi_account = ActiveSupport::HashWithIndifferentAccess.new(original)
+    end
+
+    it 'ignores a parameterless /oauth/authorize' do
+      controller.store_location_for(:user, '/oauth/authorize')
+
+      subject
+
+      expect(response).to redirect_to(root_path)
+    end
+
+    it 'ignores a multi-account popup path' do
+      controller.store_location_for(:user, '/multi_accounts/callback?code=abc&state=def')
+
+      subject
+
+      expect(response).to redirect_to(root_path)
+    end
+
+    # The important regression: when the popup arrives with `prompt=login`,
+    # `store_current_location` writes the same URL into `user_return_to` as
+    # well. Expiring only the marker just routes around it and the symptom
+    # comes back.
+    it 'ignores a stale multi-account authorize URL left in user_return_to' do
+      Rails.configuration.x.multi_account[:client_id] = 'ma-client'
+      controller.store_location_for(:user, '/oauth/authorize?client_id=ma-client&prompt=login')
+
+      subject
+
+      expect(response).to redirect_to(root_path)
+    end
+
+    it 'still honours a real third-party authorize URL' do
+      Rails.configuration.x.multi_account[:client_id] = 'ma-client'
+      controller.store_location_for(:user, '/oauth/authorize?client_id=abc&response_type=code')
+
+      subject
+
+      expect(response).to redirect_to('/oauth/authorize?client_id=abc&response_type=code')
+    end
+
+    it 'honours a fresh multi-account return marker' do
+      session[:multi_account_return_to] = '/oauth/authorize?client_id=abc&prompt=login'
+      session[:multi_account_return_to_at] = Time.now.utc.to_i
+
+      subject
+
+      expect(response).to redirect_to('/oauth/authorize?client_id=abc&prompt=login')
+    end
+
+    it 'drops a stale multi-account return marker' do
+      session[:multi_account_return_to] = '/oauth/authorize?client_id=abc&prompt=login'
+      session[:multi_account_return_to_at] = 20.minutes.ago.to_i
+
+      subject
+
+      expect(response).to redirect_to(root_path)
+    end
+
+    it 'drops a multi-account return marker that carries no timestamp' do
+      session[:multi_account_return_to] = '/oauth/authorize?client_id=abc&prompt=login'
+
+      subject
+
+      expect(response).to redirect_to(root_path)
+    end
+
+    # While a present `multi_account_return_to` meant `stored_location_for`
+    # was never read, the unused `user_return_to` stayed in the session and
+    # steered the sign-in after next to the wrong place.
+    it 'consumes user_return_to even when the multi-account marker wins' do
+      controller.store_location_for(:user, '/@someone')
+      session[:multi_account_return_to] = '/oauth/authorize?client_id=abc'
+      session[:multi_account_return_to_at] = Time.now.utc.to_i
+
+      subject
+
+      expect(controller.stored_location_for(:user)).to be_nil
+    end
+  end
 end

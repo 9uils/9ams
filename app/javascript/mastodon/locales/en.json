@@ -97,6 +97,7 @@
   "account_switcher.popup_blocked": "Popup was blocked. Please allow popups for this site.",
   "account_switcher.switch_account": "Switch account",
   "account_switcher.switch_error": "Failed to switch account.",
+  "account_switcher.switch_not_applied": "The account could not be switched. Please try again.",
   "admin.dashboard.daily_retention": "User retention rate by day after sign-up",
   "admin.dashboard.monthly_retention": "User retention rate by month after sign-up",
   "admin.dashboard.retention.average": "Average",

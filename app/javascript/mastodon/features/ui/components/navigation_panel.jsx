@@ -430,9 +430,12 @@ export const CollapsibleNavigationPanel = () => {
       onClick={shouldShowOverlay ? handleOverlayClick : undefined}
     >
       <div className={wrapperClassName}>
+        {/* No compose button in the mobile drawer: the floating compose
+            button already sits in the same view, and every extra entry pushes
+            the ones below it further under the bottom bar. */}
         <NavigationPanelWithBreakpoints
           renderSearch={showSearch}
-          renderComposeButton
+          renderComposeButton={!isMobile}
         />
       </div>
     </div>
